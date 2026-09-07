@@ -134,8 +134,12 @@ def _best(scenes, current):
 
 
 def _ar():
+    # "dynamic rooms" = the rooms we started dynamically ourselves. Deriving
+    # this from the light `dynamics` attribute is unreliable when a light
+    # belongs to more than one room (e.g. a shared string light), so we trust
+    # our own dynamic_scenes map instead.
     try:
-        return (state.getattr(DYNAMIC_SENSOR) or {}).get("active_rooms") or []
+        return list(json.loads(state.get("input_text.dynamic_scenes") or "{}").keys())
     except Exception:
         return []
 
@@ -228,6 +232,18 @@ def scene_match_all(**kwargs):
     if not FP:
         _load()
     lights_all = state.names("light")
+    # prune the dynamic-scene map: a room whose group light is off is not dynamic
+    try:
+        dmap = json.loads(state.get("input_text.dynamic_scenes") or "{}")
+    except Exception:
+        dmap = {}
+    pruned = {}
+    for r, sc in dmap.items():
+        g = GROUP_PREFIX + slugify(r)
+        if g in lights_all and state.get(g) == "on":
+            pruned[r] = sc
+    if pruned != dmap:
+        input_text.set_value(entity_id="input_text.dynamic_scenes", value=json.dumps(pruned))
     ar = _ar()
     before = _result()
     result = dict(before)

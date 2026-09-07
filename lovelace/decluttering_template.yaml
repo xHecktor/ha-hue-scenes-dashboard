@@ -48,13 +48,12 @@ decluttering_templates:
                 let baseColor=null;
                 let COLOR_SELECTED='rgba(255,152,0,0.42)';
                 let COLOR_DYNAMIC='rgba(244,67,54,0.45)';
-                let activeRooms=[]; try{activeRooms=states['sensor.dynamische_szenen'].attributes.active_rooms||[];}catch(e){}
                 let staticMap={}; try{staticMap=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}
                 let dynMap={}; try{dynMap=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}
                 SCENES.map(entity=>{
                   let attrs=states[entity].attributes;
                   let room=attrs.group_name;
-                  let roomDynamic=activeRooms.includes(room);
+                  let roomDynamic=Object.keys(dynMap).includes(room);
                   let tile={
                     'type':'tile','entity':entity,'name':(attrs.name||entity.split('.').pop()),
                     'vertical':true,'hide_state':true,
@@ -107,13 +106,12 @@ decluttering_templates:
                 let baseColor='orange';
                 let COLOR_SELECTED='rgba(255,152,0,0.42)';
                 let COLOR_DYNAMIC='rgba(244,67,54,0.45)';
-                let activeRooms=[]; try{activeRooms=states['sensor.dynamische_szenen'].attributes.active_rooms||[];}catch(e){}
                 let staticMap={}; try{staticMap=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}
                 let dynMap={}; try{dynMap=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}
                 SCENES.map(entity=>{
                   let attrs=states[entity].attributes;
                   let room=attrs.group_name;
-                  let roomDynamic=activeRooms.includes(room);
+                  let roomDynamic=Object.keys(dynMap).includes(room);
                   let tile={
                     'type':'tile','entity':entity,'name':(attrs.name||entity.split('.').pop()),
                     'vertical':true,'hide_state':true,
@@ -168,13 +166,12 @@ decluttering_templates:
                 let baseColor='teal';
                 let COLOR_SELECTED='rgba(255,152,0,0.42)';
                 let COLOR_DYNAMIC='rgba(244,67,54,0.45)';
-                let activeRooms=[]; try{activeRooms=states['sensor.dynamische_szenen'].attributes.active_rooms||[];}catch(e){}
                 let staticMap={}; try{staticMap=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}
                 let dynMap={}; try{dynMap=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}
                 SCENES.map(entity=>{
                   let attrs=states[entity].attributes;
                   let room=attrs.group_name;
-                  let roomDynamic=activeRooms.includes(room);
+                  let roomDynamic=Object.keys(dynMap).includes(room);
                   let tile={
                     'type':'tile','entity':entity,'name':(attrs.name||entity.split('.').pop()),
                     'vertical':true,'hide_state':true,
@@ -227,13 +224,12 @@ decluttering_templates:
                 let baseColor='purple';
                 let COLOR_SELECTED='rgba(255,152,0,0.42)';
                 let COLOR_DYNAMIC='rgba(244,67,54,0.45)';
-                let activeRooms=[]; try{activeRooms=states['sensor.dynamische_szenen'].attributes.active_rooms||[];}catch(e){}
                 let staticMap={}; try{staticMap=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}
                 let dynMap={}; try{dynMap=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}
                 SCENES.map(entity=>{
                   let attrs=states[entity].attributes;
                   let room=attrs.group_name;
-                  let roomDynamic=activeRooms.includes(room);
+                  let roomDynamic=Object.keys(dynMap).includes(room);
                   let tile={
                     'type':'tile','entity':entity,'name':(attrs.name||entity.split('.').pop()),
                     'vertical':true,'hide_state':true,
@@ -258,9 +254,9 @@ decluttering_templates:
                 .replace(/ä/g,'a').replace(/ö/g,'o').replace(/ü/g,'u').replace(/ß/g,'ss')
                 .replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'') + '_dynamic_speed'
             HIDE: >-
-              (states['sensor.dynamische_szenen'].attributes.active_rooms||[]).includes('[[room]]') ? '' : 'display:none !important;'
+              Object.keys(JSON.parse(states['input_text.dynamic_scenes'].state||'{}')).includes('[[room]]') ? '' : 'display:none !important;'
           entities:
-            - sensor.dynamische_szenen
+            - input_text.dynamic_scenes
             - ${SPEED}
           card:
             type: tile

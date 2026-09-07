@@ -105,6 +105,23 @@ script:
       - action: pyscript.scene_learn
         data:
           scene: "{{ scene }}"
+      # a static pick means the room is no longer dynamic -> drop it from the map
+      - variables:
+          room: "{{ state_attr(scene, 'group_name') }}"
+          cur_dyn: >-
+            {{ (states('input_text.dynamic_scenes') | from_json)
+               if states('input_text.dynamic_scenes') not in ['', 'unknown', 'unavailable']
+               else {} }}
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.dynamic_scenes
+        data:
+          value: >-
+            {% set ns = namespace(d={}) %}
+            {% for k, v in cur_dyn.items() if k != room %}
+              {% set ns.d = ns.d | combine({k: v}) %}
+            {% endfor %}
+            {{ ns.d | to_json }}
 
   # Double tap: activate dynamically, record it, and set the room's speed
   # slider to the scene's own default speed.
@@ -192,30 +209,9 @@ script:
 
 
 automation:
-  # Keep the dynamic-scene map pruned to rooms that are actually dynamic.
-  - alias: "Dynamic scenes: sync map with sensor"
-    trigger:
-      - platform: state
-        entity_id: sensor.dynamische_szenen
-    action:
-      - variables:
-          active: "{{ state_attr('sensor.dynamische_szenen','active_rooms') or [] }}"
-          current: >-
-            {{ (states('input_text.dynamic_scenes') | from_json)
-               if states('input_text.dynamic_scenes') not in ['', 'unknown', 'unavailable']
-               else {} }}
-      - action: input_text.set_value
-        target:
-          entity_id: input_text.dynamic_scenes
-        data:
-          value: >-
-            {% set ns = namespace(d={}) %}
-            {% for room, scene in current.items() if room in active %}
-              {% set ns.d = ns.d | combine({room: scene}) %}
-            {% endfor %}
-            {{ ns.d | to_json }}
-
   # Apply the per-room speed slider to that room's running dynamic scene.
+  # (The dynamic-scene map is pruned by pyscript + scene_select, so no sync
+  # automation is needed.)
   # Add one entity_id line per room.
   - alias: "Apply dynamic speed"
     id: dynamic_speed_apply
@@ -230,7 +226,9 @@ automation:
       slug: "{{ trigger.entity_id.split('.')[1] | replace('_dynamic_speed','') }}"
       room: >-
         {%- set ns = namespace(match='') -%}
-        {%- for r in (state_attr('sensor.dynamische_szenen','active_rooms') or []) -%}
+        {%- set dmap = (states('input_text.dynamic_scenes') | from_json)
+              if states('input_text.dynamic_scenes') not in ['', 'unknown', 'unavailable'] else {} -%}
+        {%- for r in dmap.keys() -%}
           {%- if r | slugify == slug -%}{%- set ns.match = r -%}{%- endif -%}
         {%- endfor -%}
         {{- ns.match -}}
