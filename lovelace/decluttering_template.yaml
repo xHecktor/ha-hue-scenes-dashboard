@@ -25,6 +25,8 @@ decluttering_templates:
             SLIDESPERVIEW: parseFloat(states['input_number.dashboard_scenes_slidesperview'].state);
             MOMENTUMRATIO: parseFloat(states['input_number.dashboard_scenes_freemodemomentumratio'].state);
             MOMENTUMVEL: parseFloat(states['input_number.dashboard_scenes_freemodemomentumvelocityratio'].state);
+            STARTCARD: >-
+              (function(){let room='[[room]]';let dyn={};try{dyn=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}let st={};try{st=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}let a=dyn[room]||st[room]||'';let i=SCENES.indexOf(a);return i>=0?i+1:1;})()
           entities:
             - ${SCENES}
             - pyscript.scene_tracker
@@ -35,6 +37,7 @@ decluttering_templates:
             - input_number.dashboard_scenes_freemodemomentumvelocityratio
           card:
             type: custom:swipe-card
+            start_card: ${STARTCARD}
             parameters:
               slidesPerView: ${SLIDESPERVIEW}
               spaceBetween: 8
@@ -82,6 +85,8 @@ decluttering_templates:
             SLIDESPERVIEW: parseFloat(states['input_number.dashboard_scenes_slidesperview'].state);
             MOMENTUMRATIO: parseFloat(states['input_number.dashboard_scenes_freemodemomentumratio'].state);
             MOMENTUMVEL: parseFloat(states['input_number.dashboard_scenes_freemodemomentumvelocityratio'].state);
+            STARTCARD: >-
+              (function(){let room='[[room]]';let dyn={};try{dyn=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}let st={};try{st=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}let a=dyn[room]||st[room]||'';let i=SCENES.indexOf(a);return i>=0?i+1:1;})()
           entities:
             - ${SCENES}
             - pyscript.scene_tracker
@@ -93,6 +98,7 @@ decluttering_templates:
             - input_number.dashboard_scenes_freemodemomentumvelocityratio
           card:
             type: custom:swipe-card
+            start_card: ${STARTCARD}
             parameters:
               slidesPerView: ${SLIDESPERVIEW}
               spaceBetween: 8
@@ -141,6 +147,8 @@ decluttering_templates:
             SLIDESPERVIEW: parseFloat(states['input_number.dashboard_scenes_slidesperview'].state);
             MOMENTUMRATIO: parseFloat(states['input_number.dashboard_scenes_freemodemomentumratio'].state);
             MOMENTUMVEL: parseFloat(states['input_number.dashboard_scenes_freemodemomentumvelocityratio'].state);
+            STARTCARD: >-
+              (function(){let room='[[room]]';let dyn={};try{dyn=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}let st={};try{st=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}let a=dyn[room]||st[room]||'';let i=SCENES.indexOf(a);return i>=0?i+1:1;})()
           entities:
             - ${SCENES}
             - pyscript.scene_tracker
@@ -153,6 +161,7 @@ decluttering_templates:
             - input_number.dashboard_scenes_freemodemomentumvelocityratio
           card:
             type: custom:swipe-card
+            start_card: ${STARTCARD}
             parameters:
               slidesPerView: ${SLIDESPERVIEW}
               spaceBetween: 8
@@ -200,6 +209,8 @@ decluttering_templates:
             SLIDESPERVIEW: parseFloat(states['input_number.dashboard_scenes_slidesperview'].state);
             MOMENTUMRATIO: parseFloat(states['input_number.dashboard_scenes_freemodemomentumratio'].state);
             MOMENTUMVEL: parseFloat(states['input_number.dashboard_scenes_freemodemomentumvelocityratio'].state);
+            STARTCARD: >-
+              (function(){let room='[[room]]';let dyn={};try{dyn=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}let st={};try{st=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}let a=dyn[room]||st[room]||'';let i=SCENES.indexOf(a);return i>=0?i+1:1;})()
           entities:
             - ${SCENES}
             - pyscript.scene_tracker
@@ -211,6 +222,7 @@ decluttering_templates:
             - input_number.dashboard_scenes_freemodemomentumvelocityratio
           card:
             type: custom:swipe-card
+            start_card: ${STARTCARD}
             parameters:
               slidesPerView: ${SLIDESPERVIEW}
               spaceBetween: 8
