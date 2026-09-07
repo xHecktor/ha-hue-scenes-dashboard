@@ -1,29 +1,24 @@
-# Calibration admin card: pick a room (or "Alle Räume") and (re)learn its
-# fingerprints, with a live status line. Put it on any view.
-# The lights briefly flash through every scene while calibrating.
+# Compact calibration card: pick a room (or "Alle Räume") and start.
+# Lights briefly flash through every scene while calibrating.
 
-type: vertical-stack
-cards:
-  - type: markdown
-    content: >
-      ### 🎨 Szenen-Kalibrierung
-
-      {% if is_state('pyscript.calibration','running') %}⏳ {{
-      state_attr('pyscript.calibration','label') }}{% else %}✅ {{
-      state_attr('pyscript.calibration','label') or 'Bereit' }}{% endif %}
-  - type: horizontal-stack
-    cards:
-      - type: entities
-        entities:
-          - entity: input_select.calibrate_room
-            name: Bereich
-      - type: button
-        name: Kalibrieren
-        icon: mdi:fingerprint
-        tap_action:
-          action: perform-action
-          perform_action: script.scene_calibrate_selected
-          confirmation:
-            text: >-
-              Kalibrierung starten? Die Lampen des gewählten Bereichs flackern
-              kurz durch alle Szenen.
+type: entities
+title: Kalibrieren
+entities:
+  - entity: input_select.calibrate_room
+    name: Bereich
+  - type: attribute
+    entity: pyscript.calibration
+    attribute: label
+    name: Status
+    icon: mdi:fingerprint
+footer:
+  type: buttons
+  entities:
+    - entity: script.scene_calibrate_selected
+      name: Start
+      icon: mdi:play
+      tap_action:
+        action: perform-action
+        perform_action: script.scene_calibrate_selected
+        confirmation:
+          text: Kalibrierung starten? Die Lampen flackern kurz durch die Szenen.
