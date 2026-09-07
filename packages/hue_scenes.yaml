@@ -1,0 +1,249 @@
+# Hue dynamic-scene control + active-scene tracking
+# Drop this into config/packages/ (needs `homeassistant: packages:` enabled)
+# or split the blocks into your configuration.yaml.
+#
+# Entity names are kept as-is (German) to match the pyscript/dashboard;
+# if you rename anything, keep it consistent across all three.
+
+template:
+  - sensor:
+      # Number of rooms currently playing a *dynamic* Hue scene.
+      # active_rooms = the room (area) names that are dynamic right now.
+      - name: "Dynamische Szenen"
+        unique_id: dynamische_szenen_aktiv
+        icon: mdi:auto-fix
+        state: >
+          {{ states.light
+             | selectattr('state', 'eq', 'on')
+             | selectattr('attributes.dynamics', 'eq', 'dynamic_palette')
+             | map(attribute='entity_id') | map('area_name')
+             | reject('none') | unique | list | count }}
+        attributes:
+          active_rooms: >
+            {{ states.light
+               | selectattr('state', 'eq', 'on')
+               | selectattr('attributes.dynamics', 'eq', 'dynamic_palette')
+               | map(attribute='entity_id') | map('area_name')
+               | reject('none') | unique | list }}
+
+
+input_text:
+  # {room: scene} map of the currently running dynamic scene per room.
+  dynamic_scenes:
+    name: Active dynamic scenes
+    max: 255
+    initial: "{}"
+
+
+input_number:
+  # --- Dashboard controls (brightness tier thresholds + swipe tuning) ---
+  dashboard_scenes_brightness_1:
+    name: Scene brightness 1 (upper threshold)
+    min: 0
+    max: 255
+    step: 1
+    mode: box
+    initial: 200
+  dashboard_scenes_brightness_2:
+    name: Scene brightness 2 (lower threshold)
+    min: 0
+    max: 255
+    step: 1
+    mode: box
+    initial: 100
+  dashboard_scenes_slidesperview:
+    name: Scenes per row
+    min: 1
+    max: 6
+    step: 0.05
+    mode: box
+    initial: 3
+  dashboard_scenes_freemodemomentumratio:
+    name: FreeMode momentum ratio
+    min: 0
+    max: 2
+    step: 0.05
+    mode: box
+    initial: 1
+  dashboard_scenes_freemodemomentumvelocityratio:
+    name: FreeMode momentum velocity
+    min: 0
+    max: 2
+    step: 0.05
+    mode: box
+    initial: 1
+
+  # --- Per-room dynamic speed (one line per room via the anchor) ---
+  wohnzimmer_dynamic_speed: &dyn_speed
+    name: Speed
+    min: 0
+    max: 100
+    step: 1
+    mode: slider
+    icon: mdi:speedometer
+  # schlafzimmer_dynamic_speed: *dyn_speed
+  # <slug>_dynamic_speed: *dyn_speed
+
+
+script:
+  # Tap: activate a scene statically, mark it active instantly, and (re)learn
+  # its fingerprint from the resulting light state.
+  scene_select:
+    alias: "Select scene"
+    mode: queued
+    fields:
+      scene:
+        description: "Scene (scene.*)"
+    sequence:
+      - action: scene.turn_on
+        target:
+          entity_id: "{{ scene }}"
+      - action: pyscript.scene_set_active
+        data:
+          room: "{{ state_attr(scene, 'group_name') }}"
+          scene: "{{ scene }}"
+      - action: pyscript.scene_learn
+        data:
+          scene: "{{ scene }}"
+
+  # Double tap: activate dynamically, record it, and set the room's speed
+  # slider to the scene's own default speed.
+  dynamic_scene_activate:
+    alias: "Activate dynamic scene"
+    mode: queued
+    fields:
+      scene:
+        description: "Scene (scene.*)"
+    sequence:
+      - action: hue.activate_scene
+        target:
+          entity_id: "{{ scene }}"
+        data:
+          dynamic: true
+      - variables:
+          room: "{{ state_attr(scene, 'group_name') }}"
+          current_dyn: >-
+            {{ (states('input_text.dynamic_scenes') | from_json)
+               if states('input_text.dynamic_scenes') not in ['', 'unknown', 'unavailable']
+               else {} }}
+          speed_entity: "input_number.{{ room | slugify }}_dynamic_speed"
+          speed_pct: "{{ (state_attr(scene, 'speed') | float(0) * 100) | round(0) | int }}"
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.dynamic_scenes
+        data:
+          value: "{{ current_dyn | combine({room: scene}) | to_json }}"
+      - if: "{{ states(speed_entity) not in ['unknown', 'unavailable'] }}"
+        then:
+          - action: input_number.set_value
+            target:
+              entity_id: "{{ speed_entity }}"
+            data:
+              value: "{{ speed_pct }}"
+
+  # Remote: step to the next/previous scene in the dashboard order.
+  scene_cycle:
+    alias: "Cycle scene"
+    mode: queued
+    fields:
+      room:
+        description: "Room name (group_name)"
+      step:
+        description: "1 = forward, -1 = backward"
+        default: 1
+      exclude:
+        description: "Scenes to skip (scene.*)"
+        default: []
+    sequence:
+      - variables:
+          B1: "{{ states('input_number.dashboard_scenes_brightness_1') | int }}"
+          B2: "{{ states('input_number.dashboard_scenes_brightness_2') | int }}"
+          pool: >-
+            {{ states.scene
+               | selectattr('attributes.group_name', 'defined')
+               | selectattr('attributes.group_name', 'eq', room)
+               | selectattr('attributes.brightness', 'defined')
+               | map(attribute='entity_id') | list
+               | reject('in', exclude) | list }}
+          bright: >-
+            {{ states.scene | selectattr('entity_id', 'in', pool)
+               | selectattr('attributes.brightness', 'gt', B1)
+               | map(attribute='entity_id') | list | sort }}
+          mid: >-
+            {{ states.scene | selectattr('entity_id', 'in', pool)
+               | selectattr('attributes.brightness', 'gt', B2)
+               | selectattr('attributes.brightness', 'le', B1)
+               | map(attribute='entity_id') | list | sort }}
+          dark: >-
+            {{ states.scene | selectattr('entity_id', 'in', pool)
+               | selectattr('attributes.brightness', 'le', B2)
+               | map(attribute='entity_id') | list | sort }}
+          scenes: "{{ bright + mid + dark }}"
+          current: "{{ (state_attr('pyscript.scene_tracker','active_scene') or {}).get(room) }}"
+          idx: "{{ scenes.index(current) if current in scenes else -1 }}"
+          next: >-
+            {{ scenes[(idx + (step | int)) % (scenes | length)]
+               if scenes | length > 0 else none }}
+      - if: "{{ next not in [none, ''] }}"
+        then:
+          - action: script.scene_select
+            data:
+              scene: "{{ next }}"
+
+
+automation:
+  # Keep the dynamic-scene map pruned to rooms that are actually dynamic.
+  - alias: "Dynamic scenes: sync map with sensor"
+    trigger:
+      - platform: state
+        entity_id: sensor.dynamische_szenen
+    action:
+      - variables:
+          active: "{{ state_attr('sensor.dynamische_szenen','active_rooms') or [] }}"
+          current: >-
+            {{ (states('input_text.dynamic_scenes') | from_json)
+               if states('input_text.dynamic_scenes') not in ['', 'unknown', 'unavailable']
+               else {} }}
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.dynamic_scenes
+        data:
+          value: >-
+            {% set ns = namespace(d={}) %}
+            {% for room, scene in current.items() if room in active %}
+              {% set ns.d = ns.d | combine({room: scene}) %}
+            {% endfor %}
+            {{ ns.d | to_json }}
+
+  # Apply the per-room speed slider to that room's running dynamic scene.
+  # Add one entity_id line per room.
+  - alias: "Apply dynamic speed"
+    id: dynamic_speed_apply
+    mode: restart
+    triggers:
+      - trigger: state
+        for: "00:00:01"
+        entity_id:
+          - input_number.wohnzimmer_dynamic_speed
+          # - input_number.<slug>_dynamic_speed
+    variables:
+      slug: "{{ trigger.entity_id.split('.')[1] | replace('_dynamic_speed','') }}"
+      room: >-
+        {%- set ns = namespace(match='') -%}
+        {%- for r in (state_attr('sensor.dynamische_szenen','active_rooms') or []) -%}
+          {%- if r | slugify == slug -%}{%- set ns.match = r -%}{%- endif -%}
+        {%- endfor -%}
+        {{- ns.match -}}
+      scene: "{{ (states('input_text.dynamic_scenes') | from_json).get(room) }}"
+    conditions:
+      - condition: template
+        value_template: "{{ room != '' }}"
+      - condition: template
+        value_template: "{{ scene not in (none, '', 'unknown') }}"
+    actions:
+      - action: hue.activate_scene
+        target:
+          entity_id: "{{ scene }}"
+        data:
+          dynamic: true
+          speed: "{{ trigger.to_state.state | int }}"

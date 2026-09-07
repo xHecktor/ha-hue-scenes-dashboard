@@ -1,0 +1,20 @@
+# One card per room. Put these inside a view.
+# `room` must be the exact Hue group_name of the room.
+# List all room names via Developer Tools > Template:
+#   {{ states.scene | map(attribute='attributes.group_name') | reject('none') | unique | list }}
+
+- type: custom:decluttering-card
+  template: scene_room
+  variables:
+    - room: Wohnzimmer
+
+- type: custom:decluttering-card
+  template: scene_room
+  variables:
+    - room: Schlafzimmer
+
+# Rooms with spaces / special characters must be quoted:
+- type: custom:decluttering-card
+  template: scene_room
+  variables:
+    - room: "Balkon Südost"
