@@ -91,6 +91,10 @@ data:
 The lights flash briefly through every scene. After that the tracker fills
 within a few seconds and stays fresh on its own (learn-on-tap).
 
+For a dashboard-friendly version, add `lovelace/calibration_card.yaml` — a
+room picker (or "Alle Räume") with a **Kalibrieren** button and a live status
+line fed by the `pyscript.calibration` entity.
+
 ## Per-room setup
 
 For each room:

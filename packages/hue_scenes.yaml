@@ -85,6 +85,15 @@ input_number:
   # <slug>_dynamic_speed: *dyn_speed
 
 
+input_select:
+  # Room picker for the calibration admin card (options auto-filled at startup).
+  calibrate_room:
+    name: Room to calibrate
+    icon: mdi:home-search
+    options:
+      - "…"
+
+
 script:
   # Tap: activate a scene statically, mark it active instantly, and (re)learn
   # its fingerprint from the resulting light state.
@@ -207,6 +216,16 @@ script:
             data:
               scene: "{{ next }}"
 
+  # Calibrate the room chosen in the picker (button cards can't template data).
+  scene_calibrate_selected:
+    alias: "Calibrate selected room"
+    sequence:
+      - variables:
+          sel: "{{ states('input_select.calibrate_room') }}"
+      - action: pyscript.scene_fingerprint_calibrate
+        data:
+          room: "{{ '' if sel in ['Alle Räume', '…'] else sel }}"
+
 
 automation:
   # Apply the per-room speed slider to that room's running dynamic scene.
@@ -245,3 +264,21 @@ automation:
         data:
           dynamic: true
           speed: "{{ trigger.to_state.state | int }}"
+
+  # Fill the calibration room picker with the actual room names on startup.
+  - alias: "Calibrate: populate room list"
+    trigger:
+      - platform: homeassistant
+        event: start
+    action:
+      - delay: "00:00:10"
+      - action: input_select.set_options
+        target:
+          entity_id: input_select.calibrate_room
+        data:
+          options: >
+            {{ ['Alle Räume'] + (states.scene
+               | selectattr('attributes.group_type', 'defined')
+               | selectattr('attributes.group_type', 'eq', 'room')
+               | map(attribute='attributes.group_name')
+               | reject('none') | unique | list | sort) }}

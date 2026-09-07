@@ -36,6 +36,11 @@ def _write_json(path, data):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
+def _status(label, running):
+    # Progress shown on the dashboard admin card.
+    state.set("pyscript.calibration", "running" if running else "idle", label=label)
+
+
 def _fp_light(ml, is_on):
     rec = {"bri": (ml.get("brightness") if is_on else 0), "mode": ml.get("color_mode")}
     if ml.get("color_mode") == "color_temp":
@@ -61,6 +66,7 @@ fields:
     example: 2
 """
     log.warning(f"FINGERPRINT: start (room={room or 'all'})")
+    _status(f"Kalibriere {room or 'alle Räume'} …", True)
     db = task.executor(_read_json, FINGERPRINT_FILE)
     if room:
         for k in list(db.keys()):
@@ -99,9 +105,11 @@ fields:
 
             db.setdefault(rname, {})[eid] = entry
             count += 1
+            _status(f"{rname}: {attrs.get('name') or eid} ({count})", True)
             log.warning(f"FINGERPRINT: {eid} ({len(entry)} lights)")
         except Exception as e:
             log.error(f"FINGERPRINT: error at {eid}: {e}")
 
     task.executor(_write_json, FINGERPRINT_FILE, db)
+    _status(f"Fertig – {count} Szenen ({room or 'alle'})", False)
     log.warning(f"FINGERPRINT: done, {count} scenes stored")
