@@ -14,6 +14,17 @@ dashboard.
 > personal setup, so expect to adapt a few things to yours — see
 > [Adapting to your setup](#adapting-to-your-setup).
 
+## Screenshots
+
+| Active scene highlighted | Dynamic scene + speed slider |
+|---|---|
+| ![Static scene highlighted in orange](images/active-scene-highlight.png) | ![Dynamic scene highlighted in red with a speed slider](images/dynamic-scene-speed.png) |
+
+The running scene is marked automatically — **orange** for a static scene,
+**red** for a dynamic one — even when it was started from the Hue app. The
+speed slider only appears while a dynamic scene is playing, and the wand icon
+marks scenes that support dynamic mode.
+
 ## Features
 
 - **Scene tiles per room** in three brightness tiers, with a curated top row of
