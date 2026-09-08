@@ -178,7 +178,13 @@ script:
             {{ (states('input_text.dynamic_scenes') | from_json)
                if states('input_text.dynamic_scenes') not in ['', 'unknown', 'unavailable']
                else {} }}
-          speed_entity: "input_number.{{ room | slugify }}_dynamic_speed"
+          # Tolerate umlaut spelling: prefer the slugify form (ü->u), fall
+          # back to the German ue/oe/ae/ss form if only that helper exists.
+          speed_entity: >-
+            {%- set a = 'input_number.' ~ (room | slugify) ~ '_dynamic_speed' -%}
+            {%- set de = room | lower | replace('ä','ae') | replace('ö','oe') | replace('ü','ue') | replace('ß','ss') -%}
+            {%- set b = 'input_number.' ~ (de | slugify) ~ '_dynamic_speed' -%}
+            {{ b if (states(b) not in ['unknown','unavailable'] and states(a) in ['unknown','unavailable']) else a }}
           speed_pct: "{{ (state_attr(scene, 'speed') | float(0) * 100) | round(0) | int }}"
       - action: input_text.set_value
         target:
@@ -274,7 +280,8 @@ automation:
         {%- set dmap = (states('input_text.dynamic_scenes') | from_json)
               if states('input_text.dynamic_scenes') not in ['', 'unknown', 'unavailable'] else {} -%}
         {%- for r in dmap.keys() -%}
-          {%- if r | slugify == slug -%}{%- set ns.match = r -%}{%- endif -%}
+          {%- set de = r | lower | replace('ä','ae') | replace('ö','oe') | replace('ü','ue') | replace('ß','ss') -%}
+          {%- if r | slugify == slug or de | slugify == slug -%}{%- set ns.match = r -%}{%- endif -%}
         {%- endfor -%}
         {{- ns.match -}}
       scene: "{{ (states('input_text.dynamic_scenes') | from_json).get(room) }}"

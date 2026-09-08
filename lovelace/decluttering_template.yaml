@@ -266,9 +266,11 @@ decluttering_templates:
         - type: custom:config-template-card
           variables:
             SPEED: >-
-              'input_number.' + '[[room]]'.toLowerCase()
-                .replace(/ä/g,'a').replace(/ö/g,'o').replace(/ü/g,'u').replace(/ß/g,'ss')
-                .replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'') + '_dynamic_speed'
+              (function(){var r='[[room]]'.toLowerCase();
+                function s(ae,oe,ue){return r.replace(/ä/g,ae).replace(/ö/g,oe).replace(/ü/g,ue).replace(/ß/g,'ss').replace(/[^a-z0-9]+/g,'_').replace(/^_+|_+$/g,'');}
+                var a='input_number.'+s('a','o','u')+'_dynamic_speed';
+                var b='input_number.'+s('ae','oe','ue')+'_dynamic_speed';
+                return (states[b]&&!states[a])?b:a;})()
             HIDE: >-
               Object.keys(JSON.parse(states['input_text.dynamic_scenes'].state||'{}')).includes('[[room]]') ? '' : 'display:none !important;'
           entities:
