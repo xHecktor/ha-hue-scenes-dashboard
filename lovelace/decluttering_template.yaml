@@ -21,7 +21,11 @@ decluttering_templates:
               let ROOM='[[room]]';
               let NAMED=['Natürliches Licht','Hell','Kühl hell','Energie tanken','Konzentrieren','Lesen','Entspannen','Ruhephase','Nachtlicht'];
               let all=Object.keys(states).filter(k=>k.startsWith('scene.') && states[k].attributes.group_name===ROOM);
-              NAMED.map(nm=>all.find(k=>states[k].attributes.name===nm)).filter(k=>k)
+              let list=NAMED.map(nm=>all.find(k=>states[k].attributes.name===nm)).filter(k=>k);
+              let dyn={};try{dyn=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}
+              let st={};try{st=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}
+              let a=dyn[ROOM]||st[ROOM]||'';
+              (list.includes(a)?[a].concat(list.filter(k=>k!==a)):list)
             SLIDESPERVIEW: parseFloat(states['input_number.dashboard_scenes_slidesperview'].state);
             MOMENTUMRATIO: parseFloat(states['input_number.dashboard_scenes_freemodemomentumratio'].state);
             MOMENTUMVEL: parseFloat(states['input_number.dashboard_scenes_freemodemomentumvelocityratio'].state);
