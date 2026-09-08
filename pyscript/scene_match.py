@@ -535,12 +535,17 @@ def _on_dyn_change(**kwargs):
     scene_match_all()
 
 
-@event_trigger("state_changed", f"entity_id.startswith('{GROUP_PREFIX}')")
+@event_trigger("state_changed", "entity_id.startswith('light.')")
 def _on_light_change(**kwargs):
-    # A room group light changed (a scene was set, dimmed, turned off, ...).
-    # Re-evaluate right after the Hue fade settles instead of waiting for the
-    # background loop. task.unique coalesces a burst of changes into one run,
-    # so we match once, 1.5 s after the last change.
+    # Any light changed (a scene was set, dimmed, turned off, ...). We watch
+    # ALL lights, not just `light.dimmer_`: with the native Hue integration a
+    # room's group and members are named for the room (light.kuche_2,
+    # light.kuche, light.badezimmer, ...) and none carry the dimmer_ prefix, so
+    # a prefix filter would never fire and event-driven detection would be dead
+    # (leaving only the slow background loop -- the cause of a room staying
+    # frozen on its last scene). Re-evaluate right after the Hue fade settles;
+    # task.unique coalesces a whole scene's worth of per-lamp change events into
+    # a single run, 1.5 s after the last change.
     task.unique("scene_light_settle")
     task.sleep(SETTLE_AFTER_CHANGE)
     scene_match_all()
