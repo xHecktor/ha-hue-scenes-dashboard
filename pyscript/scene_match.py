@@ -108,25 +108,31 @@ def _scene_distance(lights):
         fp_bri = fp.get("bri") or 0
         cur_bri = attrs.get("brightness") or 0
         d = abs(cur_bri - fp_bri) / 255.0
+        # Colour weight: a dim lamp reports colour unreliably (Hue's
+        # color_temp_kelvin jitters by hundreds of K at low brightness) and
+        # its tint is barely visible anyway, so scale the colour term by how
+        # bright the lamp actually is. Bright scenes stay fully colour-aware;
+        # dim scenes are told apart by brightness + on/off instead.
+        cw = min(fp_bri, cur_bri) / 255.0
         if "ct" in fp:
             cur = attrs.get("color_temp_kelvin")
-            d += 1.0 if cur is None else abs(cur - fp["ct"]) / 2000.0
+            d += cw * (1.0 if cur is None else abs(cur - fp["ct"]) / 2000.0)
         elif "xy" in fp:
             cur = attrs.get("xy_color")
             if not cur:
-                d += 1.0
+                d += cw * 1.0
             else:
                 dx = cur[0] - fp["xy"][0]
                 dy = cur[1] - fp["xy"][1]
-                d += ((dx * dx + dy * dy) ** 0.5) / 0.25
+                d += cw * (((dx * dx + dy * dy) ** 0.5) / 0.25)
         elif "hs" in fp:
             cur = attrs.get("hs_color")
             if not cur:
-                d += 1.0
+                d += cw * 1.0
             else:
                 dh = abs(cur[0] - fp["hs"][0])
                 dh = min(dh, 360 - dh)
-                d += dh / 180.0 + abs(cur[1] - fp["hs"][1]) / 100.0
+                d += cw * (dh / 180.0 + abs(cur[1] - fp["hs"][1]) / 100.0)
         dsum += d
     if n == 0:
         return None

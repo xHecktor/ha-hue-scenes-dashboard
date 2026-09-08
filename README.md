@@ -129,6 +129,10 @@ List the exact room names with:
 Fingerprint matching is inherently approximate:
 
 - **Identical scenes** (same colours/brightness) can't be told apart.
+- **Very dim scenes** are matched mainly by brightness and on/off: a lamp's
+  colour is weighted by how bright it is, because Hue reports colour
+  unreliably at low brightness. Two equally dim scenes that differ only in
+  tint may therefore be treated as the same.
 - **Gradient / multi-colour lights** report a single averaged colour, so scenes
   relying on them match less reliably.
 - **Dynamic scenes** cycle their colours; they are detected as "dynamic running"
