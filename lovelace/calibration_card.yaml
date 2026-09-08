@@ -1,11 +1,22 @@
-# Compact calibration card: pick a room (or "Alle Räume") and start.
-# Lights briefly flash through every scene while calibrating.
+# Calibration admin card: pick a room (or "Alle Räume"), tune the options and
+# start. Lights briefly flash through every scene while calibrating.
+#
+# Options:
+#   Bereich          – which room/zone (or all) to (re)fingerprint
+#   Einschwingzeit   – seconds to wait per scene before measuring; raise it if
+#                      a lamp's colour is still drifting when recorded
+#   Kontrast-Modus   – thorough: run each scene twice from opposite states to
+#                      detect lamps a scene doesn't control (~2x flashing)
 
 type: entities
 title: Kalibrieren
 entities:
   - entity: input_select.calibrate_room
     name: Bereich
+  - entity: input_number.calibrate_settle
+    name: Einschwingzeit
+  - entity: input_boolean.calibrate_contrast
+    name: Kontrast-Modus (gründlich)
   - type: attribute
     entity: pyscript.calibration
     attribute: label
@@ -21,4 +32,6 @@ footer:
         action: perform-action
         perform_action: script.scene_calibrate_selected
         confirmation:
-          text: Kalibrierung starten? Die Lampen flackern kurz durch die Szenen.
+          text: >-
+            Kalibrierung starten? Die Lampen flackern kurz durch die Szenen
+            (im Kontrast-Modus etwa doppelt so lange).

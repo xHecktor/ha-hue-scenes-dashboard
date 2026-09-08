@@ -82,6 +82,16 @@ input_number:
     mode: box
     initial: 1
 
+  # --- Calibration settle time (seconds to wait per scene before measuring) ---
+  calibrate_settle:
+    name: Settle (s)
+    min: 2
+    max: 12
+    step: 1
+    mode: slider
+    initial: 4
+    icon: mdi:timer-sand
+
   # --- Per-room dynamic speed (one line per room via the anchor) ---
   wohnzimmer_dynamic_speed: &dyn_speed
     name: Speed
@@ -101,6 +111,14 @@ input_select:
     icon: mdi:home-search
     options:
       - "…"
+
+
+input_boolean:
+  # Thorough calibration: run each scene twice from opposite states to detect
+  # lamps a scene does not control (~2x flashing). Off = fast single pass.
+  calibrate_contrast:
+    name: Contrast mode (thorough)
+    icon: mdi:contrast-box
 
 
 script:
@@ -257,6 +275,8 @@ script:
       - action: pyscript.scene_fingerprint_calibrate
         data:
           room: "{{ '' if sel in ['Alle Räume', '…'] else sel }}"
+          settle: "{{ states('input_number.calibrate_settle') | int(4) }}"
+          contrast: "{{ is_state('input_boolean.calibrate_contrast', 'on') }}"
 
 
 automation:
