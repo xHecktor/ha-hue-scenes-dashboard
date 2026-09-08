@@ -61,7 +61,7 @@ def _group_for(room, lights_all):
 
 ACCEPT = 0.35        # max distance to accept a match
 CLEAR = 0.60         # above this: clearly nothing -> mark room unknown
-KEEP_MARGIN = 0.05   # keep current scene only while within this of the best
+KEEP_MARGIN = 0.10   # keep current scene only while within this of the best
 LOCK_SECONDS = 30    # after a user tap, don't override the room for this long
 LOOP_SECONDS = 15    # background re-evaluation interval (backstop; events drive speed)
 SETTLE_AFTER_CHANGE = 1.5  # wait for the Hue fade to finish before matching
@@ -193,11 +193,13 @@ def _scene_distance(lights):
             dsum += 1.0
             continue
         cur_bri = attrs.get("brightness") or 0
-        # Brightness distance on a log scale: perception is roughly
-        # logarithmic, so a small absolute gap at the low end (e.g. 7 vs 23)
-        # is a real, resolvable difference, while the same absolute gap up at
-        # 230 vs 246 is not. Linear /255 flattened dim scenes into noise.
-        d = abs(math.log2(fp_bri + 1) - math.log2(cur_bri + 1)) / 8.0
+        # Brightness distance on a square-root scale. Linear /255 flattened dim
+        # scenes into noise (7 vs 23 -> 0.06); a log scale fixed the dim end but
+        # over-compressed the middle, so two mid scenes that differ only in
+        # brightness (e.g. 90 vs 143) collapsed to ~0.08 and could not be told
+        # apart. sqrt stays sensitive at both ends: 7 vs 23 -> 0.13, 90 vs 143
+        # -> 0.15, while high-end noise (240 vs 255) stays small.
+        d = abs(math.sqrt(fp_bri) - math.sqrt(cur_bri)) / 16.0
         # Colour weight: a dim lamp reports colour unreliably (Hue's
         # color_temp_kelvin jitters by hundreds of K at low brightness) and
         # its tint is barely visible anyway, so scale the colour term by how

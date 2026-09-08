@@ -146,8 +146,9 @@ Fingerprint matching is inherently approximate:
   colour is weighted by how bright it is, because Hue reports colour
   unreliably at low brightness. Two equally dim scenes that differ only in
   tint may therefore be treated as the same. Brightness itself is compared on
-  a log scale, so scenes that differ only by a small dim step (e.g. a 7 vs a
-  23 nightlight) can still be told apart.
+  a square-root scale, which stays sensitive both at the dim end (7 vs 23) and
+  in the middle (90 vs 143), so scenes that differ only in brightness can be
+  told apart.
 - **Subset scenes** (a scene that only touches one lamp of a bigger group)
   need calibration to record the other lamps as *off* — otherwise the scene
   matches any state where its one lamp happens to look right. Re-run
