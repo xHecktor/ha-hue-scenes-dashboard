@@ -24,7 +24,8 @@ ACCEPT = 0.35        # max distance to accept a match
 CLEAR = 0.60         # above this: clearly nothing -> mark room unknown
 KEEP = 0.60          # keep the current scene while it still fits this well
 LOCK_SECONDS = 30    # after a user tap, don't override the room for this long
-LOOP_SECONDS = 5     # background re-evaluation interval
+LOOP_SECONDS = 15    # background re-evaluation interval (backstop; events drive speed)
+SETTLE_AFTER_CHANGE = 1.5  # wait for the Hue fade to finish before matching
 EXCLUDE_SUFFIXES = ("_naturliches_licht",)  # adaptive scenes to ignore
 
 FP = {}
@@ -363,6 +364,17 @@ def scene_match_room(room=None, **kwargs):
 @state_trigger(f"{DYNAMIC_SENSOR}")
 def _on_dyn_change(**kwargs):
     task.sleep(2)
+    scene_match_all()
+
+
+@event_trigger("state_changed", f"entity_id.startswith('{GROUP_PREFIX}')")
+def _on_light_change(**kwargs):
+    # A room group light changed (a scene was set, dimmed, turned off, ...).
+    # Re-evaluate right after the Hue fade settles instead of waiting for the
+    # background loop. task.unique coalesces a burst of changes into one run,
+    # so we match once, 1.5 s after the last change.
+    task.unique("scene_light_settle")
+    task.sleep(SETTLE_AFTER_CHANGE)
     scene_match_all()
 
 
