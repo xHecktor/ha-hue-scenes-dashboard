@@ -88,6 +88,37 @@ def _fp_light(ml, is_on):
     return rec
 
 
+def _snap(members):
+    # A coarse snapshot of the members' state, used to detect when a scene has
+    # stopped transitioning (some Hue lamps drift their colour temperature for
+    # several seconds after a scene change).
+    s = []
+    for lid in members:
+        if state.get(lid) != "on":
+            s.append((lid, "off"))
+            continue
+        a = state.getattr(lid) or {}
+        ct = a.get("color_temp_kelvin")
+        xy = a.get("xy_color") or [0, 0]
+        s.append((lid, a.get("brightness") or 0,
+                  (ct // 25 if ct else -1), round(xy[0], 2), round(xy[1], 2)))
+    return s
+
+
+def _wait_settled(members, settle, max_wait=15.0):
+    # Wait at least `settle` seconds and until two 1s-apart reads are identical
+    # (or max_wait), so we record the settled state, not a mid-transition one.
+    prev = None
+    waited = 0.0
+    while waited < max_wait:
+        task.sleep(1.0)
+        waited += 1.0
+        snap = _snap(members)
+        if snap == prev and waited >= float(settle):
+            return
+        prev = snap
+
+
 @service
 def scene_fingerprint_calibrate(room=None, settle=4):
     """yaml
@@ -130,9 +161,9 @@ fields:
                 continue
 
             scene.turn_on(entity_id=eid)
-            task.sleep(float(settle))
-
             members = (state.getattr(group) or {}).get("entity_id") or []
+            _wait_settled(members, settle)
+
             entry = {}
             for lid in members:
                 la = state.getattr(lid) or {}

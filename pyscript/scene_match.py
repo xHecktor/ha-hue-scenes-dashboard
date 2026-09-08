@@ -61,7 +61,7 @@ def _group_for(room, lights_all):
 
 ACCEPT = 0.35        # max distance to accept a match
 CLEAR = 0.60         # above this: clearly nothing -> mark room unknown
-KEEP_MARGIN = 0.10   # keep current scene only while within this of the best
+KEEP_MARGIN = 0.05   # keep current scene only while within this of the best
 LOCK_SECONDS = 30    # after a user tap, don't override the room for this long
 LOOP_SECONDS = 15    # background re-evaluation interval (backstop; events drive speed)
 SETTLE_AFTER_CHANGE = 1.5  # wait for the Hue fade to finish before matching
@@ -107,6 +107,35 @@ def _fp_light(ml, is_on):
     elif ml.get("hs_color"):
         rec["hs"] = list(ml.get("hs_color"))
     return rec
+
+
+def _snap(members):
+    s = []
+    for lid in members:
+        if state.get(lid) != "on":
+            s.append((lid, "off"))
+            continue
+        a = state.getattr(lid) or {}
+        ct = a.get("color_temp_kelvin")
+        xy = a.get("xy_color") or [0, 0]
+        s.append((lid, a.get("brightness") or 0,
+                  (ct // 25 if ct else -1), round(xy[0], 2), round(xy[1], 2)))
+    return s
+
+
+def _wait_settled(members, settle, max_wait=15.0):
+    # Wait at least `settle` seconds and until two 1s-apart reads are identical,
+    # so a lamp that keeps drifting its colour after a scene change is recorded
+    # only once it has stopped moving.
+    prev = None
+    waited = 0.0
+    while waited < max_wait:
+        task.sleep(1.0)
+        waited += 1.0
+        snap = _snap(members)
+        if snap == prev and waited >= float(settle):
+            return
+        prev = snap
 
 
 def _load():
@@ -303,8 +332,8 @@ def scene_learn(scene=None, settle=4, **kwargs):
     group = _group_for(room, lights_all)
     if group not in lights_all:
         return
-    task.sleep(float(settle))
     members = (state.getattr(group) or {}).get("entity_id") or []
+    _wait_settled(members, settle)
     entry = {}
     for lid in members:
         la = state.getattr(lid) or {}
