@@ -284,7 +284,7 @@ def scene_set_active(room=None, scene=None, **kwargs):
 
 
 @service
-def scene_learn(scene=None, settle=2, **kwargs):
+def scene_learn(scene=None, settle=4, **kwargs):
     """Refresh one scene's fingerprint from the current light state.
 
     Called right after a static activation, so the DB self-heals as scenes

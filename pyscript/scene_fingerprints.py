@@ -89,7 +89,7 @@ def _fp_light(ml, is_on):
 
 
 @service
-def scene_fingerprint_calibrate(room=None, settle=2):
+def scene_fingerprint_calibrate(room=None, settle=4):
     """yaml
 name: Calibrate scene fingerprints
 fields:
@@ -97,8 +97,9 @@ fields:
     description: Only this room (group_name, case-insensitive). Empty = whole home.
     example: Wohnzimmer
   settle:
-    description: Seconds to wait per scene before measuring
-    example: 2
+    description: Seconds to wait per scene before measuring (raise it if a
+      lamp's colour is still drifting when recorded)
+    example: 4
 """
     log.warning(f"FINGERPRINT: start (room={room or 'all'})")
     _status(f"Kalibriere {room or 'alle Räume'} …", True)
