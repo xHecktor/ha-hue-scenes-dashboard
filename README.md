@@ -65,8 +65,11 @@ marks scenes that support dynamic mode.
 - **pyscript** (HACS) with `allow_all_imports: true`.
 - HACS frontend cards: **config-template-card**, **swipe-card**, **card-mod**,
   **decluttering-card**.
-- A **light group per room** whose `entity_id` attribute lists the room's
-  member lights, named `light.dimmer_<slug>` (configurable, see below).
+- No manual light groups needed: the code uses the **native Hue group light**
+  the integration already creates for every room and zone (`is_hue_group: true`,
+  `friendly_name` = the room name, `entity_id` = the members). A
+  `light.dimmer_<slug>` helper group is only a fallback for non-Hue setups
+  (see [Adapting to your setup](#adapting-to-your-setup)).
 
 ## Install
 
@@ -120,11 +123,13 @@ List the exact room names with:
 
 ## Adapting to your setup
 
-- **Room light group naming** — the code finds a room's lights via
-  `GROUP_PREFIX + slugify(room)` (default `light.dimmer_`). Change `GROUP_PREFIX`
-  in both pyscript files, or adapt them to resolve lights from the room's area.
-  Umlauts are tolerated: for `Küche` it tries both `light.dimmer_kuche`
-  (slugify) and `light.dimmer_kueche` (German ue/oe/ae/ss spelling).
+- **Room light group** — by default the code finds a room's lights on the
+  native Hue group light (matched by `is_hue_group` + `friendly_name`), so
+  there is nothing to name or create. Only if you are **not** on the Hue
+  integration does it fall back to a helper group `GROUP_PREFIX + slugify(room)`
+  (default `light.dimmer_`, umlaut-tolerant: `Küche` → `light.dimmer_kuche` or
+  `light.dimmer_kueche`). Change `GROUP_PREFIX` in both pyscript files to
+  rename that fallback.
 - **Standard scene names** — block 1 recognises the standard scenes by name
   (`Hell`, `Kühl hell`, …). Adjust the `NAMED` list in the template for your
   language.

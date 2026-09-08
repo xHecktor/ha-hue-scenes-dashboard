@@ -15,18 +15,24 @@ from homeassistant.util import slugify
 
 FINGERPRINT_FILE = "/config/scene_fingerprints.json"
 
-# Per-room light group entity = GROUP_PREFIX + slugify(room).
-# Its `entity_id` attribute must list the room's member lights.
+# Fallback light-group naming for non-Hue setups: GROUP_PREFIX + slugify(room).
 GROUP_PREFIX = "light.dimmer_"
 
 
 def _group_for(room, lights_all):
-    """Resolve a room's light group entity, tolerating umlaut spelling.
+    """Resolve a room's group light and its member list. Keep in sync with
+    scene_match.py.
 
-    HA's slugify turns 'Küche' into 'kuche', but a hand-named group may use
-    the German 'kueche'. Try slugify first, then the ue/oe/ae/ss variant.
-    Keep in sync with scene_match.py.
+    Prefer the native Hue group light (`is_hue_group: true`, `friendly_name`
+    = the room name) the integration already provides -- no manual group, no
+    naming convention, umlaut-proof, and `is_hue_group` separates the group
+    from a same-named single bulb. Fall back to GROUP_PREFIX + slug (with
+    umlaut tolerance) for non-Hue setups.
     """
+    for lid in lights_all:
+        a = state.getattr(lid) or {}
+        if a.get("is_hue_group") and a.get("friendly_name") == room:
+            return lid
     primary = GROUP_PREFIX + slugify(room)
     if primary in lights_all:
         return primary

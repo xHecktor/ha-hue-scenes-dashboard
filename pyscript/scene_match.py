@@ -17,28 +17,47 @@ FINGERPRINT_FILE = "/config/scene_fingerprints.json"
 DYNAMIC_SENSOR = "sensor.dynamische_szenen"
 TRACKER = "pyscript.scene_tracker"
 
-# Per-room light group entity = GROUP_PREFIX + slugify(room).
-# Its `entity_id` attribute must list the room's member lights.
+# Fallback light-group naming for non-Hue setups: GROUP_PREFIX + slugify(room).
 GROUP_PREFIX = "light.dimmer_"
+
+# room name -> resolved group entity (cheap cache; invalidated if it vanishes)
+GROUP_CACHE = {}
 
 
 def _group_for(room, lights_all):
-    """Resolve a room's light group entity, tolerating umlaut spelling.
+    """Resolve a room's group light and its member list.
 
-    HA's slugify turns 'Küche' into 'kuche', but a hand-named group may use
-    the German transliteration 'kueche'. Try the slugify form first, then the
-    ue/oe/ae/ss variant, and fall back to the slugify form.
+    The Philips Hue integration already exposes one group light per room and
+    zone (`is_hue_group: true`, `friendly_name` = the room name, `entity_id`
+    listing the members) -- so we just match on that. No manual helper group,
+    no `light.dimmer_` naming convention and no umlaut slug matching needed;
+    `is_hue_group` also separates the group (e.g. `light.kuche_2`) from a
+    same-named single bulb (`light.kuche`).
+
+    Falls back to the GROUP_PREFIX + slug convention (with umlaut tolerance)
+    for non-Hue setups.
     """
-    primary = GROUP_PREFIX + slugify(room)
-    if primary in lights_all:
-        return primary
-    de = room.lower()
-    for a, b in (("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss")):
-        de = de.replace(a, b)
-    alt = GROUP_PREFIX + slugify(de)
-    if alt in lights_all:
-        return alt
-    return primary
+    cached = GROUP_CACHE.get(room)
+    if cached and cached in lights_all:
+        return cached
+    found = None
+    for lid in lights_all:
+        a = state.getattr(lid) or {}
+        if a.get("is_hue_group") and a.get("friendly_name") == room:
+            found = lid
+            break
+    if not found:
+        primary = GROUP_PREFIX + slugify(room)
+        if primary in lights_all:
+            found = primary
+        else:
+            de = room.lower()
+            for a, b in (("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss")):
+                de = de.replace(a, b)
+            alt = GROUP_PREFIX + slugify(de)
+            found = alt if alt in lights_all else primary
+    GROUP_CACHE[room] = found
+    return found
 
 ACCEPT = 0.35        # max distance to accept a match
 CLEAR = 0.60         # above this: clearly nothing -> mark room unknown
