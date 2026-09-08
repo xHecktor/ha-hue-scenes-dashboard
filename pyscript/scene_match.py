@@ -86,6 +86,13 @@ def _scene_distance(lights):
     for lid, fp in lights.items():
         if fp.get("mode") == "onoff":
             continue
+        attrs = state.getattr(lid) or {}
+        # A member currently running its own dynamic palette (e.g. a light
+        # shared with another room that is playing a dynamic scene there) is
+        # cycling colours and would only add noise -> treat it as a wildcard
+        # so a foreign-dynamic light can never disturb this room's match.
+        if attrs.get("dynamics") == "dynamic_palette":
+            continue
         n += 1
         is_on = state.get(lid) == "on"
         want_on = not fp.get("off")
@@ -98,7 +105,6 @@ def _scene_distance(lights):
             continue
         if not want_on:  # both off -> exact match
             continue
-        attrs = state.getattr(lid) or {}
         fp_bri = fp.get("bri") or 0
         cur_bri = attrs.get("brightness") or 0
         d = abs(cur_bri - fp_bri) / 255.0
@@ -231,8 +237,11 @@ def scene_learn(scene=None, settle=2, **kwargs):
     members = (state.getattr(group) or {}).get("entity_id") or []
     entry = {}
     for lid in members:
+        la = state.getattr(lid) or {}
+        if la.get("dynamics") == "dynamic_palette":
+            continue  # foreign-dynamic member -> don't bake its cycling colour in
         on = state.get(lid) == "on"
-        entry[lid] = _fp_light(state.getattr(lid) or {}, on)
+        entry[lid] = _fp_light(la, on)
     if not entry:
         return
     FP.setdefault(room, {})[scene] = entry

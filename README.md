@@ -133,6 +133,9 @@ Fingerprint matching is inherently approximate:
   relying on them match less reliably.
 - **Dynamic scenes** cycle their colours; they are detected as "dynamic running"
   via the light attribute, not fingerprinted.
+- **Shared lights** that belong to two rooms are fine: a member currently
+  running a dynamic palette (e.g. a light playing a dynamic scene for another
+  room) is treated as a wildcard, so it can't drag a room's static match off.
 - **Adaptive scenes** like *Natural Light* drift over the day and are excluded
   from matching (`EXCLUDE_SUFFIXES`).
 

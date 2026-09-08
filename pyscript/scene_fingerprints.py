@@ -104,8 +104,11 @@ fields:
             members = (state.getattr(group) or {}).get("entity_id") or []
             entry = {}
             for lid in members:
+                la = state.getattr(lid) or {}
+                if la.get("dynamics") == "dynamic_palette":
+                    continue  # foreign-dynamic member -> don't record its cycling colour
                 on = state.get(lid) == "on"
-                entry[lid] = _fp_light(state.getattr(lid) or {}, on)
+                entry[lid] = _fp_light(la, on)
 
             db.setdefault(rname, {})[eid] = entry
             count += 1
