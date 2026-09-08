@@ -17,6 +17,8 @@ decluttering_templates:
         # ---- Block 1: standard scenes, fixed order ----
         - type: custom:config-template-card
           variables:
+            DEVID: >-
+              (function(){try{var i=localStorage.getItem('scene_dev_id');if(!i){i='d'+Math.random().toString(36).slice(2,8);localStorage.setItem('scene_dev_id',i);}return i;}catch(e){return 'nodev';}})()
             SCENES: >-
               let ROOM='[[room]]';
               let NAMED=['Natürliches Licht','Hell','Kühl hell','Energie tanken','Konzentrieren','Lesen','Entspannen','Ruhephase','Nachtlicht'];
@@ -24,7 +26,8 @@ decluttering_templates:
               let list=NAMED.map(nm=>all.find(k=>states[k].attributes.name===nm)).filter(k=>k);
               let dyn={};try{dyn=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}
               let st={};try{st=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}
-              let a=dyn[ROOM]||st[ROOM]||'';
+              let calm=false;try{calm=states['input_text.scene_active_device'].state===DEVID;}catch(e){}
+              let a=calm?'':(dyn[ROOM]||st[ROOM]||'');
               (list.includes(a)?[a].concat(list.filter(k=>k!==a)):list)
             SLIDESPERVIEW: parseFloat(states['input_number.dashboard_scenes_slidesperview'].state);
             MOMENTUMRATIO: parseFloat(states['input_number.dashboard_scenes_freemodemomentumratio'].state);
@@ -33,6 +36,7 @@ decluttering_templates:
             - ${SCENES}
             - pyscript.scene_tracker
             - input_text.dynamic_scenes
+            - input_text.scene_active_device
             - sensor.dynamische_szenen
             - input_number.dashboard_scenes_slidesperview
             - input_number.dashboard_scenes_freemodemomentumratio
@@ -61,8 +65,8 @@ decluttering_templates:
                   let tile={
                     'type':'tile','entity':entity,'name':(attrs.name||entity.split('.').pop()),
                     'vertical':true,'hide_state':true,
-                    'tap_action':{'action':'perform-action','perform_action':'script.scene_select','data':{'scene':entity}},
-                    'double_tap_action':{'action':'perform-action','perform_action':'script.dynamic_scene_activate','data':{'scene':entity}}
+                    'tap_action':{'action':'perform-action','perform_action':'script.scene_select','data':{'scene':entity,'device':DEVID}},
+                    'double_tap_action':{'action':'perform-action','perform_action':'script.dynamic_scene_activate','data':{'scene':entity,'device':DEVID}}
                   };
                   if(baseColor){tile.color=baseColor;}
                   if(attrs.is_dynamic===true){tile.icon='mdi:auto-fix';}
@@ -77,6 +81,8 @@ decluttering_templates:
         # ---- Block 2: bright tier ----
         - type: custom:config-template-card
           variables:
+            DEVID: >-
+              (function(){try{var i=localStorage.getItem('scene_dev_id');if(!i){i='d'+Math.random().toString(36).slice(2,8);localStorage.setItem('scene_dev_id',i);}return i;}catch(e){return 'nodev';}})()
             SCENES: >-
               let ROOM='[[room]]';
               let NAMED=['Natürliches Licht','Hell','Kühl hell','Energie tanken','Konzentrieren','Lesen','Entspannen','Ruhephase','Nachtlicht'];
@@ -85,7 +91,8 @@ decluttering_templates:
               .filter(k=>{let b=states[k].attributes.brightness; return b && b>B1 && b<=255;}).sort();
               let dyn={};try{dyn=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}
               let st={};try{st=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}
-              let a=dyn[ROOM]||st[ROOM]||'';
+              let calm=false;try{calm=states['input_text.scene_active_device'].state===DEVID;}catch(e){}
+              let a=calm?'':(dyn[ROOM]||st[ROOM]||'');
               (list.includes(a)?[a].concat(list.filter(k=>k!==a)):list)
             SLIDESPERVIEW: parseFloat(states['input_number.dashboard_scenes_slidesperview'].state);
             MOMENTUMRATIO: parseFloat(states['input_number.dashboard_scenes_freemodemomentumratio'].state);
@@ -94,6 +101,7 @@ decluttering_templates:
             - ${SCENES}
             - pyscript.scene_tracker
             - input_text.dynamic_scenes
+            - input_text.scene_active_device
             - sensor.dynamische_szenen
             - input_number.dashboard_scenes_brightness_1
             - input_number.dashboard_scenes_slidesperview
@@ -123,8 +131,8 @@ decluttering_templates:
                   let tile={
                     'type':'tile','entity':entity,'name':(attrs.name||entity.split('.').pop()),
                     'vertical':true,'hide_state':true,
-                    'tap_action':{'action':'perform-action','perform_action':'script.scene_select','data':{'scene':entity}},
-                    'double_tap_action':{'action':'perform-action','perform_action':'script.dynamic_scene_activate','data':{'scene':entity}}
+                    'tap_action':{'action':'perform-action','perform_action':'script.scene_select','data':{'scene':entity,'device':DEVID}},
+                    'double_tap_action':{'action':'perform-action','perform_action':'script.dynamic_scene_activate','data':{'scene':entity,'device':DEVID}}
                   };
                   if(baseColor){tile.color=baseColor;}
                   if(attrs.is_dynamic===true){tile.icon='mdi:auto-fix';}
@@ -139,6 +147,8 @@ decluttering_templates:
         # ---- Block 3: mid tier ----
         - type: custom:config-template-card
           variables:
+            DEVID: >-
+              (function(){try{var i=localStorage.getItem('scene_dev_id');if(!i){i='d'+Math.random().toString(36).slice(2,8);localStorage.setItem('scene_dev_id',i);}return i;}catch(e){return 'nodev';}})()
             SCENES: >-
               let ROOM='[[room]]';
               let NAMED=['Natürliches Licht','Hell','Kühl hell','Energie tanken','Konzentrieren','Lesen','Entspannen','Ruhephase','Nachtlicht'];
@@ -148,7 +158,8 @@ decluttering_templates:
               .filter(k=>{let b=states[k].attributes.brightness; return b && b>B2 && b<=B1;}).sort();
               let dyn={};try{dyn=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}
               let st={};try{st=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}
-              let a=dyn[ROOM]||st[ROOM]||'';
+              let calm=false;try{calm=states['input_text.scene_active_device'].state===DEVID;}catch(e){}
+              let a=calm?'':(dyn[ROOM]||st[ROOM]||'');
               (list.includes(a)?[a].concat(list.filter(k=>k!==a)):list)
             SLIDESPERVIEW: parseFloat(states['input_number.dashboard_scenes_slidesperview'].state);
             MOMENTUMRATIO: parseFloat(states['input_number.dashboard_scenes_freemodemomentumratio'].state);
@@ -157,6 +168,7 @@ decluttering_templates:
             - ${SCENES}
             - pyscript.scene_tracker
             - input_text.dynamic_scenes
+            - input_text.scene_active_device
             - sensor.dynamische_szenen
             - input_number.dashboard_scenes_brightness_1
             - input_number.dashboard_scenes_brightness_2
@@ -187,8 +199,8 @@ decluttering_templates:
                   let tile={
                     'type':'tile','entity':entity,'name':(attrs.name||entity.split('.').pop()),
                     'vertical':true,'hide_state':true,
-                    'tap_action':{'action':'perform-action','perform_action':'script.scene_select','data':{'scene':entity}},
-                    'double_tap_action':{'action':'perform-action','perform_action':'script.dynamic_scene_activate','data':{'scene':entity}}
+                    'tap_action':{'action':'perform-action','perform_action':'script.scene_select','data':{'scene':entity,'device':DEVID}},
+                    'double_tap_action':{'action':'perform-action','perform_action':'script.dynamic_scene_activate','data':{'scene':entity,'device':DEVID}}
                   };
                   if(baseColor){tile.color=baseColor;}
                   if(attrs.is_dynamic===true){tile.icon='mdi:auto-fix';}
@@ -203,6 +215,8 @@ decluttering_templates:
         # ---- Block 4: dark tier ----
         - type: custom:config-template-card
           variables:
+            DEVID: >-
+              (function(){try{var i=localStorage.getItem('scene_dev_id');if(!i){i='d'+Math.random().toString(36).slice(2,8);localStorage.setItem('scene_dev_id',i);}return i;}catch(e){return 'nodev';}})()
             SCENES: >-
               let ROOM='[[room]]';
               let NAMED=['Natürliches Licht','Hell','Kühl hell','Energie tanken','Konzentrieren','Lesen','Entspannen','Ruhephase','Nachtlicht'];
@@ -211,7 +225,8 @@ decluttering_templates:
               .filter(k=>{let b=states[k].attributes.brightness; return b>=0 && b<=B2;}).sort();
               let dyn={};try{dyn=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}
               let st={};try{st=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}
-              let a=dyn[ROOM]||st[ROOM]||'';
+              let calm=false;try{calm=states['input_text.scene_active_device'].state===DEVID;}catch(e){}
+              let a=calm?'':(dyn[ROOM]||st[ROOM]||'');
               (list.includes(a)?[a].concat(list.filter(k=>k!==a)):list)
             SLIDESPERVIEW: parseFloat(states['input_number.dashboard_scenes_slidesperview'].state);
             MOMENTUMRATIO: parseFloat(states['input_number.dashboard_scenes_freemodemomentumratio'].state);
@@ -220,6 +235,7 @@ decluttering_templates:
             - ${SCENES}
             - pyscript.scene_tracker
             - input_text.dynamic_scenes
+            - input_text.scene_active_device
             - sensor.dynamische_szenen
             - input_number.dashboard_scenes_brightness_2
             - input_number.dashboard_scenes_slidesperview
@@ -249,8 +265,8 @@ decluttering_templates:
                   let tile={
                     'type':'tile','entity':entity,'name':(attrs.name||entity.split('.').pop()),
                     'vertical':true,'hide_state':true,
-                    'tap_action':{'action':'perform-action','perform_action':'script.scene_select','data':{'scene':entity}},
-                    'double_tap_action':{'action':'perform-action','perform_action':'script.dynamic_scene_activate','data':{'scene':entity}}
+                    'tap_action':{'action':'perform-action','perform_action':'script.scene_select','data':{'scene':entity,'device':DEVID}},
+                    'double_tap_action':{'action':'perform-action','perform_action':'script.dynamic_scene_activate','data':{'scene':entity,'device':DEVID}}
                   };
                   if(baseColor){tile.color=baseColor;}
                   if(attrs.is_dynamic===true){tile.icon='mdi:auto-fix';}

@@ -34,6 +34,15 @@ input_text:
     max: 255
     initial: "{}"
 
+  # Id of the device (browser) that last tapped a scene. The dashboard on
+  # that device keeps the normal scene order; every other (passive) device
+  # pulls the active scene to the front. Set by scene_select /
+  # dynamic_scene_activate from a per-browser localStorage id.
+  scene_active_device:
+    name: Active scene device
+    max: 255
+    initial: ""
+
 
 input_number:
   # --- Dashboard controls (brightness tier thresholds + swipe tuning) ---
@@ -103,7 +112,16 @@ script:
     fields:
       scene:
         description: "Scene (scene.*)"
+      device:
+        description: "Calling browser id (for per-device scene ordering)"
+        default: ""
     sequence:
+      # Remember which device tapped, so its dashboard keeps the normal order.
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.scene_active_device
+        data:
+          value: "{{ device | default('') }}"
       - action: scene.turn_on
         target:
           entity_id: "{{ scene }}"
@@ -140,7 +158,15 @@ script:
     fields:
       scene:
         description: "Scene (scene.*)"
+      device:
+        description: "Calling browser id (for per-device scene ordering)"
+        default: ""
     sequence:
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.scene_active_device
+        data:
+          value: "{{ device | default('') }}"
       - action: hue.activate_scene
         target:
           entity_id: "{{ scene }}"
