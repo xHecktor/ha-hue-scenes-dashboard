@@ -25,8 +25,6 @@ decluttering_templates:
             SLIDESPERVIEW: parseFloat(states['input_number.dashboard_scenes_slidesperview'].state);
             MOMENTUMRATIO: parseFloat(states['input_number.dashboard_scenes_freemodemomentumratio'].state);
             MOMENTUMVEL: parseFloat(states['input_number.dashboard_scenes_freemodemomentumvelocityratio'].state);
-            STARTCARD: >-
-              (function(){let room='[[room]]';let dyn={};try{dyn=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}let st={};try{st=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}let a=dyn[room]||st[room]||'';let i=SCENES.indexOf(a);return i>=0?i+1:1;})()
           entities:
             - ${SCENES}
             - pyscript.scene_tracker
@@ -37,7 +35,6 @@ decluttering_templates:
             - input_number.dashboard_scenes_freemodemomentumvelocityratio
           card:
             type: custom:swipe-card
-            start_card: ${STARTCARD}
             parameters:
               slidesPerView: ${SLIDESPERVIEW}
               spaceBetween: 8
@@ -80,13 +77,15 @@ decluttering_templates:
               let ROOM='[[room]]';
               let NAMED=['Natürliches Licht','Hell','Kühl hell','Energie tanken','Konzentrieren','Lesen','Entspannen','Ruhephase','Nachtlicht'];
               let B1=parseInt(states['input_number.dashboard_scenes_brightness_1'].state);
-              Object.keys(states).filter(k=>k.startsWith('scene.') && states[k].attributes.group_name===ROOM && NAMED.indexOf(states[k].attributes.name)<0)
-              .filter(k=>{let b=states[k].attributes.brightness; return b && b>B1 && b<=255;}).sort()
+              let list=Object.keys(states).filter(k=>k.startsWith('scene.') && states[k].attributes.group_name===ROOM && NAMED.indexOf(states[k].attributes.name)<0)
+              .filter(k=>{let b=states[k].attributes.brightness; return b && b>B1 && b<=255;}).sort();
+              let dyn={};try{dyn=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}
+              let st={};try{st=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}
+              let a=dyn[ROOM]||st[ROOM]||'';
+              (list.includes(a)?[a].concat(list.filter(k=>k!==a)):list)
             SLIDESPERVIEW: parseFloat(states['input_number.dashboard_scenes_slidesperview'].state);
             MOMENTUMRATIO: parseFloat(states['input_number.dashboard_scenes_freemodemomentumratio'].state);
             MOMENTUMVEL: parseFloat(states['input_number.dashboard_scenes_freemodemomentumvelocityratio'].state);
-            STARTCARD: >-
-              (function(){let room='[[room]]';let dyn={};try{dyn=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}let st={};try{st=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}let a=dyn[room]||st[room]||'';let i=SCENES.indexOf(a);return i>=0?i+1:1;})()
           entities:
             - ${SCENES}
             - pyscript.scene_tracker
@@ -98,7 +97,6 @@ decluttering_templates:
             - input_number.dashboard_scenes_freemodemomentumvelocityratio
           card:
             type: custom:swipe-card
-            start_card: ${STARTCARD}
             parameters:
               slidesPerView: ${SLIDESPERVIEW}
               spaceBetween: 8
@@ -142,13 +140,15 @@ decluttering_templates:
               let NAMED=['Natürliches Licht','Hell','Kühl hell','Energie tanken','Konzentrieren','Lesen','Entspannen','Ruhephase','Nachtlicht'];
               let B1=parseInt(states['input_number.dashboard_scenes_brightness_1'].state);
               let B2=parseInt(states['input_number.dashboard_scenes_brightness_2'].state);
-              Object.keys(states).filter(k=>k.startsWith('scene.') && states[k].attributes.group_name===ROOM && NAMED.indexOf(states[k].attributes.name)<0)
-              .filter(k=>{let b=states[k].attributes.brightness; return b && b>B2 && b<=B1;}).sort()
+              let list=Object.keys(states).filter(k=>k.startsWith('scene.') && states[k].attributes.group_name===ROOM && NAMED.indexOf(states[k].attributes.name)<0)
+              .filter(k=>{let b=states[k].attributes.brightness; return b && b>B2 && b<=B1;}).sort();
+              let dyn={};try{dyn=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}
+              let st={};try{st=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}
+              let a=dyn[ROOM]||st[ROOM]||'';
+              (list.includes(a)?[a].concat(list.filter(k=>k!==a)):list)
             SLIDESPERVIEW: parseFloat(states['input_number.dashboard_scenes_slidesperview'].state);
             MOMENTUMRATIO: parseFloat(states['input_number.dashboard_scenes_freemodemomentumratio'].state);
             MOMENTUMVEL: parseFloat(states['input_number.dashboard_scenes_freemodemomentumvelocityratio'].state);
-            STARTCARD: >-
-              (function(){let room='[[room]]';let dyn={};try{dyn=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}let st={};try{st=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}let a=dyn[room]||st[room]||'';let i=SCENES.indexOf(a);return i>=0?i+1:1;})()
           entities:
             - ${SCENES}
             - pyscript.scene_tracker
@@ -161,7 +161,6 @@ decluttering_templates:
             - input_number.dashboard_scenes_freemodemomentumvelocityratio
           card:
             type: custom:swipe-card
-            start_card: ${STARTCARD}
             parameters:
               slidesPerView: ${SLIDESPERVIEW}
               spaceBetween: 8
@@ -204,13 +203,15 @@ decluttering_templates:
               let ROOM='[[room]]';
               let NAMED=['Natürliches Licht','Hell','Kühl hell','Energie tanken','Konzentrieren','Lesen','Entspannen','Ruhephase','Nachtlicht'];
               let B2=parseInt(states['input_number.dashboard_scenes_brightness_2'].state);
-              Object.keys(states).filter(k=>k.startsWith('scene.') && states[k].attributes.group_name===ROOM && NAMED.indexOf(states[k].attributes.name)<0)
-              .filter(k=>{let b=states[k].attributes.brightness; return b>=0 && b<=B2;}).sort()
+              let list=Object.keys(states).filter(k=>k.startsWith('scene.') && states[k].attributes.group_name===ROOM && NAMED.indexOf(states[k].attributes.name)<0)
+              .filter(k=>{let b=states[k].attributes.brightness; return b>=0 && b<=B2;}).sort();
+              let dyn={};try{dyn=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}
+              let st={};try{st=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}
+              let a=dyn[ROOM]||st[ROOM]||'';
+              (list.includes(a)?[a].concat(list.filter(k=>k!==a)):list)
             SLIDESPERVIEW: parseFloat(states['input_number.dashboard_scenes_slidesperview'].state);
             MOMENTUMRATIO: parseFloat(states['input_number.dashboard_scenes_freemodemomentumratio'].state);
             MOMENTUMVEL: parseFloat(states['input_number.dashboard_scenes_freemodemomentumvelocityratio'].state);
-            STARTCARD: >-
-              (function(){let room='[[room]]';let dyn={};try{dyn=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}let st={};try{st=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}let a=dyn[room]||st[room]||'';let i=SCENES.indexOf(a);return i>=0?i+1:1;})()
           entities:
             - ${SCENES}
             - pyscript.scene_tracker
@@ -222,7 +223,6 @@ decluttering_templates:
             - input_number.dashboard_scenes_freemodemomentumvelocityratio
           card:
             type: custom:swipe-card
-            start_card: ${STARTCARD}
             parameters:
               slidesPerView: ${SLIDESPERVIEW}
               spaceBetween: 8
