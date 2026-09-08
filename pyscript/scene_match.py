@@ -94,18 +94,35 @@ def _fp_light(ml, is_on):
     if not is_on:
         return {"bri": 0, "off": True}
     rec = {"bri": ml.get("brightness"), "mode": ml.get("color_mode")}
-    # Capture colour by what's actually reported, not by color_mode: a Hue lamp
-    # can momentarily report color_mode 'onoff' right after a scene change while
-    # color_temp_kelvin / xy are already populated. Trusting color_mode there
-    # stored a colourless 'onoff' entry that the matcher then skipped entirely.
-    if ml.get("color_mode") == "color_temp" and ml.get("color_temp_kelvin") is not None:
-        rec["ct"] = ml.get("color_temp_kelvin")
-    elif ml.get("xy_color"):
-        rec["xy"] = list(ml.get("xy_color"))
-    elif ml.get("color_temp_kelvin") is not None:
-        rec["ct"] = ml.get("color_temp_kelvin")
-    elif ml.get("hs_color"):
-        rec["hs"] = list(ml.get("hs_color"))
+    # Record EVERY colour value the lamp reports (ct, xy, hs, rgb, effect), so
+    # the JSON is the full picture for diagnosis and future signals -- even the
+    # ones matching doesn't use today. `pc` marks which axis matching should
+    # actually compare on (a lamp reports several notations of the same colour,
+    # and can momentarily report color_mode 'onoff' after a scene change while
+    # the colour values are already populated).
+    ct = ml.get("color_temp_kelvin")
+    xy = ml.get("xy_color")
+    hs = ml.get("hs_color")
+    rgb = ml.get("rgb_color")
+    eff = ml.get("effect")
+    if ct is not None:
+        rec["ct"] = ct
+    if xy:
+        rec["xy"] = list(xy)
+    if hs:
+        rec["hs"] = list(hs)
+    if rgb:
+        rec["rgb"] = list(rgb)
+    if eff and eff != "off":
+        rec["effect"] = eff
+    if ml.get("color_mode") == "color_temp" and ct is not None:
+        rec["pc"] = "ct"
+    elif xy:
+        rec["pc"] = "xy"
+    elif ct is not None:
+        rec["pc"] = "ct"
+    elif hs:
+        rec["pc"] = "hs"
     return rec
 
 
@@ -206,14 +223,19 @@ def _scene_distance(lights):
         # bright the lamp actually is. Bright scenes stay fully colour-aware;
         # dim scenes are told apart by brightness + on/off instead.
         cw = min(fp_bri, cur_bri) / 255.0
-        if "ct" in fp:
+        # Which colour axis to compare on. New fingerprints carry `pc`; older
+        # ones stored only the primary axis, so fall back to whichever exists.
+        pc = fp.get("pc")
+        if pc is None:
+            pc = "ct" if "ct" in fp else ("xy" if "xy" in fp else ("hs" if "hs" in fp else None))
+        if pc == "ct":
             cur = attrs.get("color_temp_kelvin")
             # /1200: a ~190 K gap (Hell 2702 vs Lesen 2890) is a real, visible
             # difference; /2000 rated it 0.09 and the two stayed inseparable.
             # Colour is already brightness-weighted, so tightening this doesn't
             # hurt dim scenes (whose ct is noisy but down-weighted anyway).
             d += cw * (1.0 if cur is None else abs(cur - fp["ct"]) / 1200.0)
-        elif "xy" in fp:
+        elif pc == "xy":
             cur = attrs.get("xy_color")
             if not cur:
                 d += cw * 1.0
@@ -221,7 +243,7 @@ def _scene_distance(lights):
                 dx = cur[0] - fp["xy"][0]
                 dy = cur[1] - fp["xy"][1]
                 d += cw * (((dx * dx + dy * dy) ** 0.5) / 0.25)
-        elif "hs" in fp:
+        elif pc == "hs":
             cur = attrs.get("hs_color")
             if not cur:
                 d += cw * 1.0

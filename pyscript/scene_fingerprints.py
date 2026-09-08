@@ -73,18 +73,32 @@ def _fp_light(ml, is_on):
     if not is_on:
         return {"bri": 0, "off": True}
     rec = {"bri": ml.get("brightness"), "mode": ml.get("color_mode")}
-    # Capture colour by what's actually reported, not by color_mode: a Hue lamp
-    # can momentarily report color_mode 'onoff' right after a scene change while
-    # color_temp_kelvin / xy are already populated. Keep in sync with
-    # scene_match.py.
-    if ml.get("color_mode") == "color_temp" and ml.get("color_temp_kelvin") is not None:
-        rec["ct"] = ml.get("color_temp_kelvin")
-    elif ml.get("xy_color"):
-        rec["xy"] = list(ml.get("xy_color"))
-    elif ml.get("color_temp_kelvin") is not None:
-        rec["ct"] = ml.get("color_temp_kelvin")
-    elif ml.get("hs_color"):
-        rec["hs"] = list(ml.get("hs_color"))
+    # Record EVERY colour value the lamp reports (full picture for diagnosis and
+    # future signals); `pc` marks the axis matching compares on. Keep in sync
+    # with scene_match.py.
+    ct = ml.get("color_temp_kelvin")
+    xy = ml.get("xy_color")
+    hs = ml.get("hs_color")
+    rgb = ml.get("rgb_color")
+    eff = ml.get("effect")
+    if ct is not None:
+        rec["ct"] = ct
+    if xy:
+        rec["xy"] = list(xy)
+    if hs:
+        rec["hs"] = list(hs)
+    if rgb:
+        rec["rgb"] = list(rgb)
+    if eff and eff != "off":
+        rec["effect"] = eff
+    if ml.get("color_mode") == "color_temp" and ct is not None:
+        rec["pc"] = "ct"
+    elif xy:
+        rec["pc"] = "xy"
+    elif ct is not None:
+        rec["pc"] = "ct"
+    elif hs:
+        rec["pc"] = "hs"
     return rec
 
 
