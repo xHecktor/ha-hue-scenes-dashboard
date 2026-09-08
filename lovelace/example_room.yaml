@@ -1,7 +1,10 @@
-# One card per room. Put these inside a view.
-# `room` must be the exact Hue group_name of the room.
-# List all room names via Developer Tools > Template:
+# One card per room OR zone. Put these inside a view.
+# `room` must be the exact Hue group_name (works the same for rooms and zones).
+# List all room/zone names via Developer Tools > Template:
 #   {{ states.scene | map(attribute='attributes.group_name') | reject('none') | unique | list }}
+# Or only the zones:
+#   {{ states.scene | selectattr('attributes.group_type','eq','zone')
+#      | map(attribute='attributes.group_name') | reject('none') | unique | list }}
 
 - type: custom:decluttering-card
   template: scene_room
@@ -18,3 +21,15 @@
   template: scene_room
   variables:
     - room: "Balkon Südost"
+
+# A Hue ZONE is used exactly like a room — just pass its group_name.
+# (The zone's native Hue group light is found automatically.)
+- type: custom:decluttering-card
+  template: scene_room
+  variables:
+    - room: Weihnachtsbeleuchtung
+
+- type: custom:decluttering-card
+  template: scene_room
+  variables:
+    - room: "Wohnz. Stehlampen"
