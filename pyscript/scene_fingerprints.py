@@ -104,8 +104,11 @@ def _fp_light(ml, is_on):
 
 def _snap(members):
     # A coarse snapshot of the members' state, used to detect when a scene has
-    # stopped transitioning (some Hue lamps drift their colour temperature for
-    # several seconds after a scene change).
+    # stopped transitioning (some Hue lamps drift their colour temperature -- or
+    # briefly report the wrong color_mode -- for several seconds after a scene
+    # change). color_mode is part of the snapshot so we never record a lamp
+    # mid-mode-flip and bake in the wrong colour axis. Keep in sync with
+    # scene_match.py.
     s = []
     for lid in members:
         if state.get(lid) != "on":
@@ -114,14 +117,15 @@ def _snap(members):
         a = state.getattr(lid) or {}
         ct = a.get("color_temp_kelvin")
         xy = a.get("xy_color") or [0, 0]
-        s.append((lid, a.get("brightness") or 0,
+        s.append((lid, a.get("brightness") or 0, a.get("color_mode"),
                   (ct // 25 if ct else -1), round(xy[0], 2), round(xy[1], 2)))
     return s
 
 
 def _wait_settled(members, settle, max_wait=15.0):
     # Wait at least `settle` seconds and until two 1s-apart reads are identical
-    # (or max_wait), so we record the settled state, not a mid-transition one.
+    # (brightness AND color_mode AND colour, or max_wait), so we record the
+    # settled state, not a mid-transition one.
     prev = None
     waited = 0.0
     while waited < max_wait:

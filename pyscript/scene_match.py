@@ -135,15 +135,22 @@ def _snap(members):
         a = state.getattr(lid) or {}
         ct = a.get("color_temp_kelvin")
         xy = a.get("xy_color") or [0, 0]
-        s.append((lid, a.get("brightness") or 0,
+        # color_mode is part of the snapshot on purpose: a Hue lamp can briefly
+        # report the wrong mode (e.g. xy) right after a scene change before it
+        # settles on color_temp. Without the mode here the snapshot looked
+        # "stable" mid-transition and calibration baked in the wrong colour axis
+        # (that was the Arbeitszimmer ruhephase bug: stored as rgb/xy instead of
+        # ct). Waiting for the mode to hold steady too fixes that at the source.
+        s.append((lid, a.get("brightness") or 0, a.get("color_mode"),
                   (ct // 25 if ct else -1), round(xy[0], 2), round(xy[1], 2)))
     return s
 
 
 def _wait_settled(members, settle, max_wait=15.0):
-    # Wait at least `settle` seconds and until two 1s-apart reads are identical,
-    # so a lamp that keeps drifting its colour after a scene change is recorded
-    # only once it has stopped moving.
+    # Wait at least `settle` seconds and until two 1s-apart reads are identical
+    # (brightness AND color_mode AND colour), so a lamp that keeps drifting its
+    # colour -- or is still flipping colour_mode -- after a scene change is
+    # recorded only once it has fully stopped moving.
     prev = None
     waited = 0.0
     while waited < max_wait:
@@ -225,34 +232,46 @@ def _scene_distance(lights):
         # bri ~50-100, so it gets a gentler sqrt weight -- otherwise genuinely
         # different colour scenes (a deep orange vs a pink at bri 75) collapsed.
         base = min(fp_bri, cur_bri) / 255.0
-        # Which colour axis to compare on. New fingerprints carry `pc`; older
-        # ones stored only the primary axis, so fall back to whichever exists.
+        # Which colour axis to compare on. `pc` is the axis the scene was
+        # captured in (from its settled color_mode) and stays the primary
+        # choice. But a lamp can momentarily report a different mode at match
+        # time (only xy while it should be color_temp, say); rather than charge
+        # full colour penalty for that transient, fall back to whichever axis
+        # the fingerprint and the live lamp currently BOTH carry, preferring the
+        # most stable one (ct > xy > hs). New fingerprints carry `pc`; older
+        # ones stored only a primary axis, so seed the order from what exists.
         pc = fp.get("pc")
         if pc is None:
             pc = "ct" if "ct" in fp else ("xy" if "xy" in fp else ("hs" if "hs" in fp else None))
-        if pc == "ct":
-            cur = attrs.get("color_temp_kelvin")
+        live = {"ct": attrs.get("color_temp_kelvin"),
+                "xy": attrs.get("xy_color"), "hs": attrs.get("hs_color")}
+        axis = None
+        for cand in [pc, "ct", "xy", "hs"]:
+            if cand and cand in fp and live.get(cand):
+                axis = cand
+                break
+        if axis is None:
+            # fingerprint had a colour but the live lamp reports none right now
+            if pc is not None:
+                d += math.sqrt(base) * 1.0
+        elif axis == "ct":
             # /1200: a ~190 K gap (Hell 2702 vs Lesen 2890) is a real, visible
             # difference; /2000 rated it 0.09 and the two stayed inseparable.
-            d += base * (1.0 if cur is None else abs(cur - fp["ct"]) / 1200.0)
-        elif pc == "xy":
+            # ct jitters when dim, so it keeps the aggressive linear brightness
+            # weight; xy/hs stay stable when dim and get a gentler sqrt weight.
+            d += base * (abs(live["ct"] - fp["ct"]) / 1200.0)
+        elif axis == "xy":
             cw = math.sqrt(base)
-            cur = attrs.get("xy_color")
-            if not cur:
-                d += cw * 1.0
-            else:
-                dx = cur[0] - fp["xy"][0]
-                dy = cur[1] - fp["xy"][1]
-                d += cw * (((dx * dx + dy * dy) ** 0.5) / 0.25)
-        elif pc == "hs":
+            cur = live["xy"]
+            dx = cur[0] - fp["xy"][0]
+            dy = cur[1] - fp["xy"][1]
+            d += cw * (((dx * dx + dy * dy) ** 0.5) / 0.25)
+        elif axis == "hs":
             cw = math.sqrt(base)
-            cur = attrs.get("hs_color")
-            if not cur:
-                d += cw * 1.0
-            else:
-                dh = abs(cur[0] - fp["hs"][0])
-                dh = min(dh, 360 - dh)
-                d += cw * (dh / 180.0 + abs(cur[1] - fp["hs"][1]) / 100.0)
+            cur = live["hs"]
+            dh = abs(cur[0] - fp["hs"][0])
+            dh = min(dh, 360 - dh)
+            d += cw * (dh / 180.0 + abs(cur[1] - fp["hs"][1]) / 100.0)
         dsum += d
     if n == 0:
         return None
