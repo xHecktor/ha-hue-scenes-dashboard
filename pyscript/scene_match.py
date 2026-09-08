@@ -284,6 +284,55 @@ def scene_match_all(**kwargs):
 
 
 @service
+def scene_debug(room=None, **kwargs):
+    """yaml
+name: Debug scene distances
+description: Log the live light state and every scene's distance for one room.
+fields:
+  room:
+    description: Room name (group_name)
+    example: Flur
+"""
+    if not room:
+        return
+    if not FP:
+        _load()
+    key = None
+    for k in FP.keys():
+        if slugify(k) == slugify(room):
+            key = k
+            break
+    if key is None:
+        log.warning(f"Matcher DEBUG: room '{room}' not in DB")
+        return
+    group = GROUP_PREFIX + slugify(key)
+    members = (state.getattr(group) or {}).get("entity_id") or []
+    lines = [f"DEBUG {key}  group={state.get(group)}"]
+    for lid in members:
+        a = state.getattr(lid) or {}
+        on = state.get(lid) == "on"
+        col = ""
+        if a.get("color_temp_kelvin") is not None:
+            col = f"ct={a.get('color_temp_kelvin')}"
+        elif a.get("xy_color"):
+            col = f"xy={a.get('xy_color')}"
+        dyn = " DYN" if a.get("dynamics") == "dynamic_palette" else ""
+        bri = a.get("brightness") if on else 0
+        lines.append(f"  {lid.split('.')[-1]}: {'on' if on else 'off'} bri={bri} {col}{dyn}")
+    scored = []
+    for sc, lights in FP[key].items():
+        d = _scene_distance(lights)
+        scored.append((999.0 if d is None else d, sc))
+    scored.sort()
+    lines.append(f"  --- ACCEPT<={ACCEPT} KEEP/CLEAR<={CLEAR} ---")
+    for d, sc in scored:
+        tag = " [EXCL]" if _excluded(sc) else ""
+        val = "-" if d == 999.0 else round(d, 3)
+        lines.append(f"  {val}  {sc.split('.')[-1]}{tag}")
+    log.warning("Matcher " + "\n".join(lines))
+
+
+@service
 def scene_match_room(room=None, **kwargs):
     """Re-evaluate a single room on demand (always logs its distance line)."""
     if not room:
