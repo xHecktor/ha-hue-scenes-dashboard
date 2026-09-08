@@ -152,12 +152,14 @@ List the exact room names with:
   (`Hell`, `Kühl hell`, …). Adjust the `NAMED` list in the template for your
   language.
 - **Aggregation (`BLEND_WEIGHT`)** — a scene's distance is the *mean* of its
-  per-lamp distances (robust: no single lamp dominates). If two scenes differ
-  in only **one** lamp of a big group, the mean can dilute that difference.
-  Set `BLEND_WEIGHT` in `scene_match.py` toward ~`0.4` to mix in the single
-  largest per-lamp distance (`(1-w)·mean + w·max`) and separate such pairs.
-  Default `0` (pure mean); higher values also make a single noisy lamp count
-  for more, so raise it only against a measured, still-too-close pair.
+  per-lamp distances (robust: no single lamp dominates) blended with the single
+  largest per-lamp distance: `(1-w)·mean + w·max`. This matters when two scenes
+  differ in only **one** lamp of a big group and the rest are identical (a
+  shared always-on strip, say), which dilutes the mean — the lone differing
+  lamp still lifts them apart. Default `0.3` (a measured compromise); `0` is
+  pure mean, and higher values separate tight pairs more but make a single
+  noisy lamp count for more. Blend only ever raises cross-scene distances, so a
+  scene always still matches itself at ~0.
 - **Entity names** are German (`sensor.dynamische_szenen`, …) to match the
   bundle; rename freely, but keep them consistent across pyscript, package and
   dashboard.

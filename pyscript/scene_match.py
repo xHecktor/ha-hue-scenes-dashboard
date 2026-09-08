@@ -66,12 +66,17 @@ LOCK_SECONDS = 30    # after a user tap, don't override the room for this long
 LOOP_SECONDS = 15    # background re-evaluation interval (backstop; events drive speed)
 SETTLE_AFTER_CHANGE = 1.5  # wait for the Hue fade to finish before matching
 # Scene distance is the MEAN of the per-lamp distances (robust: no single lamp
-# dominates). BLEND_WEIGHT mixes in the single largest per-lamp distance:
+# dominates) blended with the single largest per-lamp distance:
 #   distance = (1 - w) * mean + w * max
-# Default 0 = pure mean. Raise toward ~0.4 only if two scenes that differ in
-# just ONE lamp stay too close (the mean dilutes a lone differing lamp); higher
-# values separate such pairs better but make a single noisy lamp matter more.
-BLEND_WEIGHT = 0.0
+# 0.3 is a measured compromise: when two scenes differ in only ONE lamp of a
+# group and the rest are identical (e.g. Hell vs Lesen where a shared always-on
+# strip dilutes the mean), the lone differing lamp still lifts them apart --
+# Badezimmer Hell/Lesen goes 0.078 -> ~0.10, Arbeitszimmer 0.082 -> ~0.10 --
+# while uniformly-differing pairs (mean == max) are untouched. Blend only ever
+# raises cross-scene distances (better separation); a true scene still matches
+# itself at ~0. Set to 0 for pure mean; raise toward ~0.5 for even tighter
+# separation at the cost of a single noisy lamp mattering more.
+BLEND_WEIGHT = 0.3
 EXCLUDE_SUFFIXES = ("_naturliches_licht",)  # adaptive scenes to ignore
 
 FP = {}
