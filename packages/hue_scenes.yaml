@@ -312,6 +312,6 @@ automation:
           options: >
             {{ ['Alle Räume'] + (states.scene
                | selectattr('attributes.group_type', 'defined')
-               | selectattr('attributes.group_type', 'eq', 'room')
+               | selectattr('attributes.group_type', 'in', ['room', 'zone'])
                | map(attribute='attributes.group_name')
                | reject('none') | unique | list | sort) }}

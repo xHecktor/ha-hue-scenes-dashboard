@@ -111,7 +111,7 @@ fields:
     for eid in state.names("scene"):
         try:
             attrs = state.getattr(eid) or {}
-            if attrs.get("group_type") != "room":
+            if attrs.get("group_type") not in ("room", "zone"):
                 continue
             rname = attrs.get("group_name")
             if not rname:
