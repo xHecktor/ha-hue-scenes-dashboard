@@ -9,6 +9,7 @@ Requires pyscript with `allow_all_imports: true`.
 """
 
 import json
+import math
 import time
 from homeassistant.util import slugify
 
@@ -22,7 +23,7 @@ GROUP_PREFIX = "light.dimmer_"
 
 ACCEPT = 0.35        # max distance to accept a match
 CLEAR = 0.60         # above this: clearly nothing -> mark room unknown
-KEEP = 0.60          # keep the current scene while it still fits this well
+KEEP_MARGIN = 0.10   # keep current scene only while within this of the best
 LOCK_SECONDS = 30    # after a user tap, don't override the room for this long
 LOOP_SECONDS = 15    # background re-evaluation interval (backstop; events drive speed)
 SETTLE_AFTER_CHANGE = 1.5  # wait for the Hue fade to finish before matching
@@ -108,7 +109,11 @@ def _scene_distance(lights):
             continue
         fp_bri = fp.get("bri") or 0
         cur_bri = attrs.get("brightness") or 0
-        d = abs(cur_bri - fp_bri) / 255.0
+        # Brightness distance on a log scale: perception is roughly
+        # logarithmic, so a small absolute gap at the low end (e.g. 7 vs 23)
+        # is a real, resolvable difference, while the same absolute gap up at
+        # 230 vs 246 is not. Linear /255 flattened dim scenes into noise.
+        d = abs(math.log2(fp_bri + 1) - math.log2(cur_bri + 1)) / 8.0
         # Colour weight: a dim lamp reports colour unreliably (Hue's
         # color_temp_kelvin jitters by hundreds of K at low brightness) and
         # its tint is barely visible anyway, so scale the colour term by how
@@ -194,13 +199,15 @@ def _update_room(room, scenes, ar, lights_all, result):
     # freshly tapped -> locked, keep
     if current and time.time() < LOCK.get(room, 0):
         return f"{room}:{current.split('.')[-1]}:lock"
-    # current scene still fits -> keep (no flip-flop)
+    best, d = _best(scenes, current)
+    # Hold the current scene only while it stays within a small margin of the
+    # best candidate. This damps flip-flop between near-identical scenes but,
+    # unlike the old absolute threshold, still lets the room switch to a
+    # clearly different scene (e.g. Stillen <-> Nachtlicht, ~0.20 apart).
     if current and current in scenes and not _excluded(current):
         dc = _scene_distance(scenes[current])
-        if dc is not None and dc <= KEEP:
+        if dc is not None and dc <= CLEAR and (d is None or dc <= d + KEEP_MARGIN):
             return f"{room}:{current.split('.')[-1]}:keep({round(dc, 2)})"
-    # otherwise re-detect
-    best, d = _best(scenes, current)
     short = best.split(".")[-1] if best else "-"
     if best is not None and d is not None:
         if d <= ACCEPT:
@@ -331,7 +338,7 @@ fields:
         d = _scene_distance(lights)
         scored.append((999.0 if d is None else d, sc))
     scored.sort()
-    lines.append(f"  --- ACCEPT<={ACCEPT} KEEP/CLEAR<={CLEAR} ---")
+    lines.append(f"  --- ACCEPT<={ACCEPT} CLEAR>={CLEAR} keep-margin={KEEP_MARGIN} ---")
     for d, sc in scored:
         tag = " [EXCL]" if _excluded(sc) else ""
         val = "-" if d == 999.0 else round(d, 3)

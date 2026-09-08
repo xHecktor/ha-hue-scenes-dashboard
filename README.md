@@ -132,7 +132,13 @@ Fingerprint matching is inherently approximate:
 - **Very dim scenes** are matched mainly by brightness and on/off: a lamp's
   colour is weighted by how bright it is, because Hue reports colour
   unreliably at low brightness. Two equally dim scenes that differ only in
-  tint may therefore be treated as the same.
+  tint may therefore be treated as the same. Brightness itself is compared on
+  a log scale, so scenes that differ only by a small dim step (e.g. a 7 vs a
+  23 nightlight) can still be told apart.
+- **Subset scenes** (a scene that only touches one lamp of a bigger group)
+  need calibration to record the other lamps as *off* — otherwise the scene
+  matches any state where its one lamp happens to look right. Re-run
+  `scene_fingerprint_calibrate` for the room after adding such a scene.
 - **Gradient / multi-colour lights** report a single averaged colour, so scenes
   relying on them match less reliably.
 - **Dynamic scenes** cycle their colours; they are detected as "dynamic running"
