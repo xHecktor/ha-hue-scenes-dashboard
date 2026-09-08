@@ -48,7 +48,12 @@ def _write_json(path, data):
 
 
 def _fp_light(ml, is_on):
-    rec = {"bri": (ml.get("brightness") if is_on else 0), "mode": ml.get("color_mode")}
+    # An off member is a fingerprint of its own ("this light must be off"),
+    # which is the strongest discriminator between scenes that light up
+    # different subsets of a group.
+    if not is_on:
+        return {"bri": 0, "off": True}
+    rec = {"bri": ml.get("brightness"), "mode": ml.get("color_mode")}
     if ml.get("color_mode") == "color_temp":
         rec["ct"] = ml.get("color_temp_kelvin")
     else:
@@ -82,10 +87,20 @@ def _scene_distance(lights):
         if fp.get("mode") == "onoff":
             continue
         n += 1
-        attrs = state.getattr(lid) or {}
         is_on = state.get(lid) == "on"
+        want_on = not fp.get("off")
+        # On/off state is a hard signal and dominates. Crucially, we do NOT
+        # read colour from an off light: many Hue lamps keep reporting their
+        # last color_temp_kelvin while off, which used to make an off light
+        # look almost like an on one (only the brightness differed).
+        if want_on != is_on:
+            dsum += 1.0
+            continue
+        if not want_on:  # both off -> exact match
+            continue
+        attrs = state.getattr(lid) or {}
         fp_bri = fp.get("bri") or 0
-        cur_bri = (attrs.get("brightness") or 0) if is_on else 0
+        cur_bri = attrs.get("brightness") or 0
         d = abs(cur_bri - fp_bri) / 255.0
         if "ct" in fp:
             cur = attrs.get("color_temp_kelvin")
@@ -216,9 +231,8 @@ def scene_learn(scene=None, settle=2, **kwargs):
     members = (state.getattr(group) or {}).get("entity_id") or []
     entry = {}
     for lid in members:
-        if state.get(lid) != "on":
-            continue
-        entry[lid] = _fp_light(state.getattr(lid) or {}, True)
+        on = state.get(lid) == "on"
+        entry[lid] = _fp_light(state.getattr(lid) or {}, on)
     if not entry:
         return
     FP.setdefault(room, {})[scene] = entry

@@ -42,8 +42,11 @@ marks scenes that support dynamic mode.
 ## How it works
 
 1. `scene_fingerprint_calibrate` (pyscript) activates each room scene once and
-   records the resulting per-light state (`brightness` + `color_temp` or `xy`)
-   into `/config/scene_fingerprints.json`.
+   records the resulting per-light state (`brightness` + `color_temp` or `xy`,
+   **including which member lights stay off**) into
+   `/config/scene_fingerprints.json`. That off/on subset is what tells apart
+   scenes lighting up different parts of a group (e.g. *gedimmt Diele* vs
+   *gedimmt kleiner Flur*).
 2. `scene_match.py` runs a small loop that compares the live lights of each room
    against the fingerprints and writes the best match to
    `pyscript.scene_tracker` (attribute `active_scene`, a `{room: scene}` map).

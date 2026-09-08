@@ -42,7 +42,12 @@ def _status(label, running):
 
 
 def _fp_light(ml, is_on):
-    rec = {"bri": (ml.get("brightness") if is_on else 0), "mode": ml.get("color_mode")}
+    # An off member is a fingerprint of its own ("this light must be off"),
+    # the strongest discriminator between scenes that light up different
+    # subsets of a group. Keep in sync with scene_match.py.
+    if not is_on:
+        return {"bri": 0, "off": True}
+    rec = {"bri": ml.get("brightness"), "mode": ml.get("color_mode")}
     if ml.get("color_mode") == "color_temp":
         rec["ct"] = ml.get("color_temp_kelvin")
     else:
@@ -99,9 +104,8 @@ fields:
             members = (state.getattr(group) or {}).get("entity_id") or []
             entry = {}
             for lid in members:
-                if state.get(lid) != "on":
-                    continue
-                entry[lid] = _fp_light(state.getattr(lid) or {}, True)
+                on = state.get(lid) == "on"
+                entry[lid] = _fp_light(state.getattr(lid) or {}, on)
 
             db.setdefault(rname, {})[eid] = entry
             count += 1
