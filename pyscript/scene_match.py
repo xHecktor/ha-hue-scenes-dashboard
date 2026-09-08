@@ -208,7 +208,11 @@ def _scene_distance(lights):
         cw = min(fp_bri, cur_bri) / 255.0
         if "ct" in fp:
             cur = attrs.get("color_temp_kelvin")
-            d += cw * (1.0 if cur is None else abs(cur - fp["ct"]) / 2000.0)
+            # /1200: a ~190 K gap (Hell 2702 vs Lesen 2890) is a real, visible
+            # difference; /2000 rated it 0.09 and the two stayed inseparable.
+            # Colour is already brightness-weighted, so tightening this doesn't
+            # hurt dim scenes (whose ct is noisy but down-weighted anyway).
+            d += cw * (1.0 if cur is None else abs(cur - fp["ct"]) / 1200.0)
         elif "xy" in fp:
             cur = attrs.get("xy_color")
             if not cur:
