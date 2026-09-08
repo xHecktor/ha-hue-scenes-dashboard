@@ -34,10 +34,14 @@ decluttering_templates:
             MOMENTUMVEL: parseFloat(states['input_number.dashboard_scenes_freemodemomentumvelocityratio'].state);
           entities:
             - ${SCENES}
-            - pyscript.scene_tracker
-            - input_text.dynamic_scenes
+            # Watch the highlight/reorder sources only on PASSIVE devices.
+            # On the device that last tapped (calm), these evaluate to '' so
+            # config-template-card does not rebuild the swipe row on a tap and
+            # the scroll position is kept. The highlight still updates live via
+            # each tile's reactive card-mod template.
+            - ${(states['input_text.scene_active_device']&&states['input_text.scene_active_device'].state===DEVID)?'':'pyscript.scene_tracker'}
+            - ${(states['input_text.scene_active_device']&&states['input_text.scene_active_device'].state===DEVID)?'':'input_text.dynamic_scenes'}
             - input_text.scene_active_device
-            - sensor.dynamische_szenen
             - input_number.dashboard_scenes_slidesperview
             - input_number.dashboard_scenes_freemodemomentumratio
             - input_number.dashboard_scenes_freemodemomentumvelocityratio
@@ -54,26 +58,18 @@ decluttering_templates:
               ${
                 let cards=[];
                 let baseColor=null;
-                let COLOR_SELECTED='rgba(255,152,0,0.42)';
-                let COLOR_DYNAMIC='rgba(244,67,54,0.45)';
-                let staticMap={}; try{staticMap=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}
-                let dynMap={}; try{dynMap=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}
+                let HL="{% set e=config.entity %}{% set r=state_attr(e,'group_name') %}{% set d=(states('input_text.dynamic_scenes')|from_json) if states('input_text.dynamic_scenes') not in ['','unknown','unavailable'] else {} %}{% set s=state_attr('pyscript.scene_tracker','active_scene') or {} %}{% if d.get(r)==e %}ha-card{background:rgba(244,67,54,0.45)!important;}{% elif r not in d and s.get(r)==e %}ha-card{background:rgba(255,152,0,0.42)!important;}{% endif %}";
                 SCENES.map(entity=>{
                   let attrs=states[entity].attributes;
-                  let room=attrs.group_name;
-                  let roomDynamic=Object.keys(dynMap).includes(room);
                   let tile={
                     'type':'tile','entity':entity,'name':(attrs.name||entity.split('.').pop()),
                     'vertical':true,'hide_state':true,
+                    'card_mod':{'style':HL},
                     'tap_action':{'action':'perform-action','perform_action':'script.scene_select','data':{'scene':entity,'device':DEVID}},
                     'double_tap_action':{'action':'perform-action','perform_action':'script.dynamic_scene_activate','data':{'scene':entity,'device':DEVID}}
                   };
                   if(baseColor){tile.color=baseColor;}
                   if(attrs.is_dynamic===true){tile.icon='mdi:auto-fix';}
-                  let bg=null;
-                  if(roomDynamic && entity===dynMap[room]){bg=COLOR_DYNAMIC;}
-                  else if(!roomDynamic && entity===staticMap[room]){bg=COLOR_SELECTED;}
-                  if(bg){tile['card_mod']={'style':'ha-card { background: '+bg+' !important; }'};}
                   cards=cards.concat(tile);
                 });
                 cards;
@@ -99,10 +95,14 @@ decluttering_templates:
             MOMENTUMVEL: parseFloat(states['input_number.dashboard_scenes_freemodemomentumvelocityratio'].state);
           entities:
             - ${SCENES}
-            - pyscript.scene_tracker
-            - input_text.dynamic_scenes
+            # Watch the highlight/reorder sources only on PASSIVE devices.
+            # On the device that last tapped (calm), these evaluate to '' so
+            # config-template-card does not rebuild the swipe row on a tap and
+            # the scroll position is kept. The highlight still updates live via
+            # each tile's reactive card-mod template.
+            - ${(states['input_text.scene_active_device']&&states['input_text.scene_active_device'].state===DEVID)?'':'pyscript.scene_tracker'}
+            - ${(states['input_text.scene_active_device']&&states['input_text.scene_active_device'].state===DEVID)?'':'input_text.dynamic_scenes'}
             - input_text.scene_active_device
-            - sensor.dynamische_szenen
             - input_number.dashboard_scenes_brightness_1
             - input_number.dashboard_scenes_slidesperview
             - input_number.dashboard_scenes_freemodemomentumratio
@@ -120,26 +120,18 @@ decluttering_templates:
               ${
                 let cards=[];
                 let baseColor='orange';
-                let COLOR_SELECTED='rgba(255,152,0,0.42)';
-                let COLOR_DYNAMIC='rgba(244,67,54,0.45)';
-                let staticMap={}; try{staticMap=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}
-                let dynMap={}; try{dynMap=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}
+                let HL="{% set e=config.entity %}{% set r=state_attr(e,'group_name') %}{% set d=(states('input_text.dynamic_scenes')|from_json) if states('input_text.dynamic_scenes') not in ['','unknown','unavailable'] else {} %}{% set s=state_attr('pyscript.scene_tracker','active_scene') or {} %}{% if d.get(r)==e %}ha-card{background:rgba(244,67,54,0.45)!important;}{% elif r not in d and s.get(r)==e %}ha-card{background:rgba(255,152,0,0.42)!important;}{% endif %}";
                 SCENES.map(entity=>{
                   let attrs=states[entity].attributes;
-                  let room=attrs.group_name;
-                  let roomDynamic=Object.keys(dynMap).includes(room);
                   let tile={
                     'type':'tile','entity':entity,'name':(attrs.name||entity.split('.').pop()),
                     'vertical':true,'hide_state':true,
+                    'card_mod':{'style':HL},
                     'tap_action':{'action':'perform-action','perform_action':'script.scene_select','data':{'scene':entity,'device':DEVID}},
                     'double_tap_action':{'action':'perform-action','perform_action':'script.dynamic_scene_activate','data':{'scene':entity,'device':DEVID}}
                   };
                   if(baseColor){tile.color=baseColor;}
                   if(attrs.is_dynamic===true){tile.icon='mdi:auto-fix';}
-                  let bg=null;
-                  if(roomDynamic && entity===dynMap[room]){bg=COLOR_DYNAMIC;}
-                  else if(!roomDynamic && entity===staticMap[room]){bg=COLOR_SELECTED;}
-                  if(bg){tile['card_mod']={'style':'ha-card { background: '+bg+' !important; }'};}
                   cards=cards.concat(tile);
                 });
                 cards;
@@ -166,10 +158,14 @@ decluttering_templates:
             MOMENTUMVEL: parseFloat(states['input_number.dashboard_scenes_freemodemomentumvelocityratio'].state);
           entities:
             - ${SCENES}
-            - pyscript.scene_tracker
-            - input_text.dynamic_scenes
+            # Watch the highlight/reorder sources only on PASSIVE devices.
+            # On the device that last tapped (calm), these evaluate to '' so
+            # config-template-card does not rebuild the swipe row on a tap and
+            # the scroll position is kept. The highlight still updates live via
+            # each tile's reactive card-mod template.
+            - ${(states['input_text.scene_active_device']&&states['input_text.scene_active_device'].state===DEVID)?'':'pyscript.scene_tracker'}
+            - ${(states['input_text.scene_active_device']&&states['input_text.scene_active_device'].state===DEVID)?'':'input_text.dynamic_scenes'}
             - input_text.scene_active_device
-            - sensor.dynamische_szenen
             - input_number.dashboard_scenes_brightness_1
             - input_number.dashboard_scenes_brightness_2
             - input_number.dashboard_scenes_slidesperview
@@ -188,26 +184,18 @@ decluttering_templates:
               ${
                 let cards=[];
                 let baseColor='teal';
-                let COLOR_SELECTED='rgba(255,152,0,0.42)';
-                let COLOR_DYNAMIC='rgba(244,67,54,0.45)';
-                let staticMap={}; try{staticMap=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}
-                let dynMap={}; try{dynMap=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}
+                let HL="{% set e=config.entity %}{% set r=state_attr(e,'group_name') %}{% set d=(states('input_text.dynamic_scenes')|from_json) if states('input_text.dynamic_scenes') not in ['','unknown','unavailable'] else {} %}{% set s=state_attr('pyscript.scene_tracker','active_scene') or {} %}{% if d.get(r)==e %}ha-card{background:rgba(244,67,54,0.45)!important;}{% elif r not in d and s.get(r)==e %}ha-card{background:rgba(255,152,0,0.42)!important;}{% endif %}";
                 SCENES.map(entity=>{
                   let attrs=states[entity].attributes;
-                  let room=attrs.group_name;
-                  let roomDynamic=Object.keys(dynMap).includes(room);
                   let tile={
                     'type':'tile','entity':entity,'name':(attrs.name||entity.split('.').pop()),
                     'vertical':true,'hide_state':true,
+                    'card_mod':{'style':HL},
                     'tap_action':{'action':'perform-action','perform_action':'script.scene_select','data':{'scene':entity,'device':DEVID}},
                     'double_tap_action':{'action':'perform-action','perform_action':'script.dynamic_scene_activate','data':{'scene':entity,'device':DEVID}}
                   };
                   if(baseColor){tile.color=baseColor;}
                   if(attrs.is_dynamic===true){tile.icon='mdi:auto-fix';}
-                  let bg=null;
-                  if(roomDynamic && entity===dynMap[room]){bg=COLOR_DYNAMIC;}
-                  else if(!roomDynamic && entity===staticMap[room]){bg=COLOR_SELECTED;}
-                  if(bg){tile['card_mod']={'style':'ha-card { background: '+bg+' !important; }'};}
                   cards=cards.concat(tile);
                 });
                 cards;
@@ -233,10 +221,14 @@ decluttering_templates:
             MOMENTUMVEL: parseFloat(states['input_number.dashboard_scenes_freemodemomentumvelocityratio'].state);
           entities:
             - ${SCENES}
-            - pyscript.scene_tracker
-            - input_text.dynamic_scenes
+            # Watch the highlight/reorder sources only on PASSIVE devices.
+            # On the device that last tapped (calm), these evaluate to '' so
+            # config-template-card does not rebuild the swipe row on a tap and
+            # the scroll position is kept. The highlight still updates live via
+            # each tile's reactive card-mod template.
+            - ${(states['input_text.scene_active_device']&&states['input_text.scene_active_device'].state===DEVID)?'':'pyscript.scene_tracker'}
+            - ${(states['input_text.scene_active_device']&&states['input_text.scene_active_device'].state===DEVID)?'':'input_text.dynamic_scenes'}
             - input_text.scene_active_device
-            - sensor.dynamische_szenen
             - input_number.dashboard_scenes_brightness_2
             - input_number.dashboard_scenes_slidesperview
             - input_number.dashboard_scenes_freemodemomentumratio
@@ -254,26 +246,18 @@ decluttering_templates:
               ${
                 let cards=[];
                 let baseColor='purple';
-                let COLOR_SELECTED='rgba(255,152,0,0.42)';
-                let COLOR_DYNAMIC='rgba(244,67,54,0.45)';
-                let staticMap={}; try{staticMap=states['pyscript.scene_tracker'].attributes.active_scene||{};}catch(e){}
-                let dynMap={}; try{dynMap=JSON.parse(states['input_text.dynamic_scenes'].state||'{}');}catch(e){}
+                let HL="{% set e=config.entity %}{% set r=state_attr(e,'group_name') %}{% set d=(states('input_text.dynamic_scenes')|from_json) if states('input_text.dynamic_scenes') not in ['','unknown','unavailable'] else {} %}{% set s=state_attr('pyscript.scene_tracker','active_scene') or {} %}{% if d.get(r)==e %}ha-card{background:rgba(244,67,54,0.45)!important;}{% elif r not in d and s.get(r)==e %}ha-card{background:rgba(255,152,0,0.42)!important;}{% endif %}";
                 SCENES.map(entity=>{
                   let attrs=states[entity].attributes;
-                  let room=attrs.group_name;
-                  let roomDynamic=Object.keys(dynMap).includes(room);
                   let tile={
                     'type':'tile','entity':entity,'name':(attrs.name||entity.split('.').pop()),
                     'vertical':true,'hide_state':true,
+                    'card_mod':{'style':HL},
                     'tap_action':{'action':'perform-action','perform_action':'script.scene_select','data':{'scene':entity,'device':DEVID}},
                     'double_tap_action':{'action':'perform-action','perform_action':'script.dynamic_scene_activate','data':{'scene':entity,'device':DEVID}}
                   };
                   if(baseColor){tile.color=baseColor;}
                   if(attrs.is_dynamic===true){tile.icon='mdi:auto-fix';}
-                  let bg=null;
-                  if(roomDynamic && entity===dynMap[room]){bg=COLOR_DYNAMIC;}
-                  else if(!roomDynamic && entity===staticMap[room]){bg=COLOR_SELECTED;}
-                  if(bg){tile['card_mod']={'style':'ha-card { background: '+bg+' !important; }'};}
                   cards=cards.concat(tile);
                 });
                 cards;

@@ -32,9 +32,11 @@ marks scenes that support dynamic mode.
 - **Active-scene highlight** — the running scene is marked (orange = static,
   red = dynamic), including scenes started outside Home Assistant. Passive
   displays pull the active scene to the front of its row; the device you are
-  actually tapping on keeps the normal order, so stepping through scenes
-  doesn't reshuffle under your finger (per-device via a `localStorage` id, no
-  extra integration needed).
+  actually tapping on keeps the normal order and its scroll position, so
+  stepping through scenes doesn't reshuffle or jump back under your finger
+  (per-device via a `localStorage` id; the highlight itself is a reactive
+  card-mod template, so tapping never rebuilds the row — no extra integration
+  needed).
 - **Dynamic scenes** — double-tap a tile to start it dynamically; a speed slider
   appears only while dynamic is running and is preset to the scene's own speed.
 - **Self-maintaining database** — every time you tap a scene its fingerprint is
