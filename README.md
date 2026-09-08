@@ -103,6 +103,24 @@ data:
 The lights flash briefly through every scene. After that the tracker fills
 within a few seconds and stays fresh on its own (learn-on-tap).
 
+**Contrast mode (thorough).** If a scene shares a group with a lamp it does
+*not* control (that lamp then holds whatever a previous scene left, polluting
+the fingerprint), calibrate with `contrast: true`:
+
+```yaml
+action: pyscript.scene_fingerprint_calibrate
+data:
+  room: Badezimmer
+  contrast: true
+```
+
+Each scene is run **twice from opposite starting states** (warm+bright vs
+cool+dim). Any lamp that ends up different between the two runs is one the
+scene doesn't control — it is flagged `dontcare` in the JSON and ignored when
+matching. Costs ~2× the flashing, so use it only for a room that stays
+ambiguous. The flag survives learn-on-tap (a normal tap can't re-verify
+control, so it carries the flag forward).
+
 For a dashboard-friendly version, add `lovelace/calibration_card.yaml` — a
 room picker (or "Alle Räume") with a **Kalibrieren** button and a live status
 line fed by the `pyscript.calibration` entity.
@@ -133,6 +151,13 @@ List the exact room names with:
 - **Standard scene names** — block 1 recognises the standard scenes by name
   (`Hell`, `Kühl hell`, …). Adjust the `NAMED` list in the template for your
   language.
+- **Aggregation (`BLEND_WEIGHT`)** — a scene's distance is the *mean* of its
+  per-lamp distances (robust: no single lamp dominates). If two scenes differ
+  in only **one** lamp of a big group, the mean can dilute that difference.
+  Set `BLEND_WEIGHT` in `scene_match.py` toward ~`0.4` to mix in the single
+  largest per-lamp distance (`(1-w)·mean + w·max`) and separate such pairs.
+  Default `0` (pure mean); higher values also make a single noisy lamp count
+  for more, so raise it only against a measured, still-too-close pair.
 - **Entity names** are German (`sensor.dynamische_szenen`, …) to match the
   bundle; rename freely, but keep them consistent across pyscript, package and
   dashboard.
@@ -153,6 +178,10 @@ Fingerprint matching is inherently approximate:
   need calibration to record the other lamps as *off* — otherwise the scene
   matches any state where its one lamp happens to look right. Re-run
   `scene_fingerprint_calibrate` for the room after adding such a scene.
+- **Uncontrolled lamps** — a scene that leaves a group member untouched bakes
+  in whatever a previous scene left on it, which then fights the match. Run a
+  `contrast: true` calibration (see [Calibrate](#calibrate)) to detect and
+  flag those lamps as `dontcare` so they are ignored.
 - **Gradient / multi-colour lights** report a single averaged colour, so scenes
   relying on them match less reliably.
 - **Dynamic scenes** cycle their colours; they are detected as "dynamic running"

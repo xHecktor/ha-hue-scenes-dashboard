@@ -137,8 +137,72 @@ def _wait_settled(members, settle, max_wait=15.0):
         prev = snap
 
 
+def _capture(members):
+    # One settled snapshot of the members as fingerprint records.
+    e = {}
+    for lid in members:
+        la = state.getattr(lid) or {}
+        if la.get("dynamics") == "dynamic_palette":
+            continue  # foreign-dynamic member -> don't record its cycling colour
+        on = state.get(lid) == "on"
+        e[lid] = _fp_light(la, on)
+    return e
+
+
+def _prime(members, warm):
+    # Force every member into a deliberately extreme state (warm+bright vs
+    # cool+dim, or on vs off for pure on/off devices) BEFORE activating the
+    # scene. Running the scene once from each opposite starting point and
+    # diffing the settled results reveals which lamps the scene actually
+    # controls: a controlled lamp converges to the same value both times, an
+    # uncontrolled one keeps whatever it was primed to.
+    for lid in members:
+        try:
+            a = state.getattr(lid) or {}
+            modes = a.get("supported_color_modes") or []
+            if "color_temp" in modes:
+                light.turn_on(entity_id=lid, transition=0,
+                              brightness=230 if warm else 30,
+                              color_temp_kelvin=2200 if warm else 6000)
+            elif "xy" in modes or "hs" in modes:
+                light.turn_on(entity_id=lid, transition=0,
+                              brightness=230 if warm else 30,
+                              rgb_color=[255, 120, 0] if warm else [0, 120, 255])
+            elif "brightness" in modes:
+                light.turn_on(entity_id=lid, transition=0,
+                              brightness=230 if warm else 30)
+            else:  # pure on/off device -> the only contrast it can show is on/off
+                if warm:
+                    light.turn_on(entity_id=lid)
+                else:
+                    light.turn_off(entity_id=lid)
+        except Exception as e:
+            log.warning(f"FINGERPRINT: prime {lid} failed: {e}")
+
+
+def _controlled(ra, rb):
+    # True if the two contrast runs agree closely enough that the scene clearly
+    # drove this lamp to a fixed state; False if the lamp just held its primed
+    # value (i.e. the scene does not control it -> mark it don't-care).
+    if ra.get("off") and rb.get("off"):
+        return True
+    if bool(ra.get("off")) != bool(rb.get("off")):
+        return False
+    if abs((ra.get("bri") or 0) - (rb.get("bri") or 0)) > 40:
+        return False
+    if "ct" in ra and "ct" in rb:
+        if abs(ra["ct"] - rb["ct"]) > 300:
+            return False
+    elif "xy" in ra and "xy" in rb:
+        dx = ra["xy"][0] - rb["xy"][0]
+        dy = ra["xy"][1] - rb["xy"][1]
+        if (dx * dx + dy * dy) ** 0.5 > 0.05:
+            return False
+    return True
+
+
 @service
-def scene_fingerprint_calibrate(room=None, settle=4):
+def scene_fingerprint_calibrate(room=None, settle=4, contrast=False):
     """yaml
 name: Calibrate scene fingerprints
 fields:
@@ -149,8 +213,13 @@ fields:
     description: Seconds to wait per scene before measuring (raise it if a
       lamp's colour is still drifting when recorded)
     example: 4
+  contrast:
+    description: Slow, thorough mode -- run each scene twice from opposite
+      starting states to detect lamps the scene does not actually control
+      (marked don't-care and ignored when matching). ~2x the flashing.
+    example: false
 """
-    log.warning(f"FINGERPRINT: start (room={room or 'all'})")
+    log.warning(f"FINGERPRINT: start (room={room or 'all'}, contrast={contrast})")
     _status(f"Kalibriere {room or 'alle Räume'} …", True)
     db = task.executor(_read_json, FINGERPRINT_FILE)
     if room:
@@ -178,22 +247,39 @@ fields:
                 log.warning(f"FINGERPRINT: {eid} skipped (no {group})")
                 continue
 
-            scene.turn_on(entity_id=eid)
             members = (state.getattr(group) or {}).get("entity_id") or []
-            _wait_settled(members, settle)
 
-            entry = {}
-            for lid in members:
-                la = state.getattr(lid) or {}
-                if la.get("dynamics") == "dynamic_palette":
-                    continue  # foreign-dynamic member -> don't record its cycling colour
-                on = state.get(lid) == "on"
-                entry[lid] = _fp_light(la, on)
+            if contrast:
+                # Two passes from opposite primed states; a lamp that ends up
+                # different between them is not controlled by this scene.
+                _prime(members, True)
+                task.sleep(1.5)
+                scene.turn_on(entity_id=eid)
+                _wait_settled(members, settle)
+                run_a = _capture(members)
+                _prime(members, False)
+                task.sleep(1.5)
+                scene.turn_on(entity_id=eid)
+                _wait_settled(members, settle)
+                run_b = _capture(members)
+                entry = {}
+                for lid, rb in run_b.items():
+                    ra = run_a.get(lid)
+                    if ra is not None and not _controlled(ra, rb):
+                        rb = dict(rb)
+                        rb["dontcare"] = True
+                    entry[lid] = rb
+            else:
+                scene.turn_on(entity_id=eid)
+                _wait_settled(members, settle)
+                entry = _capture(members)
 
             db.setdefault(rname, {})[eid] = entry
             count += 1
+            dc = sum(1 for r in entry.values() if r.get("dontcare"))
+            dctxt = f", {dc} don't-care" if dc else ""
             _status(f"{rname}: {attrs.get('name') or eid} ({count})", True)
-            log.warning(f"FINGERPRINT: {eid} ({len(entry)} lights)")
+            log.warning(f"FINGERPRINT: {eid} ({len(entry)} lights{dctxt})")
         except Exception as e:
             log.error(f"FINGERPRINT: error at {eid}: {e}")
 

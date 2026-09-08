@@ -65,6 +65,13 @@ KEEP_MARGIN = 0.10   # keep current scene only while within this of the best
 LOCK_SECONDS = 30    # after a user tap, don't override the room for this long
 LOOP_SECONDS = 15    # background re-evaluation interval (backstop; events drive speed)
 SETTLE_AFTER_CHANGE = 1.5  # wait for the Hue fade to finish before matching
+# Scene distance is the MEAN of the per-lamp distances (robust: no single lamp
+# dominates). BLEND_WEIGHT mixes in the single largest per-lamp distance:
+#   distance = (1 - w) * mean + w * max
+# Default 0 = pure mean. Raise toward ~0.4 only if two scenes that differ in
+# just ONE lamp stay too close (the mean dilutes a lone differing lamp); higher
+# values separate such pairs better but make a single noisy lamp matter more.
+BLEND_WEIGHT = 0.0
 EXCLUDE_SUFFIXES = ("_naturliches_licht",)  # adaptive scenes to ignore
 
 FP = {}
@@ -179,9 +186,13 @@ def _excluded(sc):
 
 
 def _scene_distance(lights):
-    dsum = 0.0
-    n = 0
+    dists = []
     for lid, fp in lights.items():
+        # A lamp a contrast calibration proved this scene does NOT control
+        # (flagged `dontcare`) holds whatever the previous scene left behind,
+        # so it is not a feature of this scene -> never let it weigh in.
+        if fp.get("dontcare"):
+            continue
         attrs = state.getattr(lid) or {}
         # A member currently running its own dynamic palette (e.g. a light
         # shared with another room that is playing a dynamic scene there) is
@@ -205,16 +216,14 @@ def _scene_distance(lights):
         # the on/off state actually mismatches.
         if fp_bri is None:
             if want_on != is_on:
-                n += 1
-                dsum += 1.0
+                dists.append(1.0)
             continue
-        n += 1
         # On/off state is a hard signal and dominates. Crucially, we do NOT
         # read colour from an off light: many Hue lamps keep reporting their
         # last color_temp_kelvin while off, which used to make an off light
         # look almost like an on one (only the brightness differed).
         if want_on != is_on:
-            dsum += 1.0
+            dists.append(1.0)
             continue
         cur_bri = attrs.get("brightness") or 0
         # Brightness distance on a square-root scale. Linear /255 flattened dim
@@ -272,10 +281,15 @@ def _scene_distance(lights):
             dh = abs(cur[0] - fp["hs"][0])
             dh = min(dh, 360 - dh)
             d += cw * (dh / 180.0 + abs(cur[1] - fp["hs"][1]) / 100.0)
-        dsum += d
-    if n == 0:
+        dists.append(d)
+    if not dists:
         return None
-    return dsum / n
+    mean = sum(dists) / len(dists)
+    if BLEND_WEIGHT <= 0.0:
+        return mean
+    # Blend in the single largest per-lamp distance so a pair of scenes that
+    # differ in only ONE lamp (which the mean dilutes) still separates.
+    return (1.0 - BLEND_WEIGHT) * mean + BLEND_WEIGHT * max(dists)
 
 
 def _best(scenes, current):
@@ -392,6 +406,14 @@ def scene_learn(scene=None, settle=4, **kwargs):
         entry[lid] = _fp_light(la, on)
     if not entry:
         return
+    # A single-pass re-learn cannot re-verify which lamps the scene controls,
+    # so carry any `dontcare` flags from the previous (contrast-calibrated)
+    # entry forward instead of silently dropping them on every tap.
+    prev = FP.get(room, {}).get(scene, {})
+    for lid, rec in entry.items():
+        p = prev.get(lid)
+        if isinstance(p, dict) and p.get("dontcare"):
+            rec["dontcare"] = True
     FP.setdefault(room, {})[scene] = entry
     task.executor(_write_json, FINGERPRINT_FILE, FP)
     log.info(f"Learned: {scene} ({len(entry)} lights)")
