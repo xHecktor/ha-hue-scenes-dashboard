@@ -123,6 +123,8 @@ List the exact room names with:
 - **Room light group naming** — the code finds a room's lights via
   `GROUP_PREFIX + slugify(room)` (default `light.dimmer_`). Change `GROUP_PREFIX`
   in both pyscript files, or adapt them to resolve lights from the room's area.
+  Umlauts are tolerated: for `Küche` it tries both `light.dimmer_kuche`
+  (slugify) and `light.dimmer_kueche` (German ue/oe/ae/ss spelling).
 - **Standard scene names** — block 1 recognises the standard scenes by name
   (`Hell`, `Kühl hell`, …). Adjust the `NAMED` list in the template for your
   language.

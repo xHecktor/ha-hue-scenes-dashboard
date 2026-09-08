@@ -21,6 +21,25 @@ TRACKER = "pyscript.scene_tracker"
 # Its `entity_id` attribute must list the room's member lights.
 GROUP_PREFIX = "light.dimmer_"
 
+
+def _group_for(room, lights_all):
+    """Resolve a room's light group entity, tolerating umlaut spelling.
+
+    HA's slugify turns 'Küche' into 'kuche', but a hand-named group may use
+    the German transliteration 'kueche'. Try the slugify form first, then the
+    ue/oe/ae/ss variant, and fall back to the slugify form.
+    """
+    primary = GROUP_PREFIX + slugify(room)
+    if primary in lights_all:
+        return primary
+    de = room.lower()
+    for a, b in (("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss")):
+        de = de.replace(a, b)
+    alt = GROUP_PREFIX + slugify(de)
+    if alt in lights_all:
+        return alt
+    return primary
+
 ACCEPT = 0.35        # max distance to accept a match
 CLEAR = 0.60         # above this: clearly nothing -> mark room unknown
 KEEP_MARGIN = 0.10   # keep current scene only while within this of the best
@@ -190,7 +209,7 @@ def _result():
 
 
 def _update_room(room, scenes, ar, lights_all, result):
-    group = GROUP_PREFIX + slugify(room)
+    group = _group_for(room, lights_all)
     if group not in lights_all:
         return None
     if state.get(group) != "on":
@@ -249,8 +268,9 @@ def scene_learn(scene=None, settle=2, **kwargs):
     room = attrs.get("group_name")
     if not room:
         return
-    group = GROUP_PREFIX + slugify(room)
-    if group not in state.names("light"):
+    lights_all = state.names("light")
+    group = _group_for(room, lights_all)
+    if group not in lights_all:
         return
     task.sleep(float(settle))
     members = (state.getattr(group) or {}).get("entity_id") or []
@@ -281,7 +301,7 @@ def scene_match_all(**kwargs):
         dmap = {}
     pruned = {}
     for r, sc in dmap.items():
-        g = GROUP_PREFIX + slugify(r)
+        g = _group_for(r, lights_all)
         if g in lights_all and state.get(g) == "on":
             pruned[r] = sc
     if pruned != dmap:
@@ -324,9 +344,9 @@ fields:
     if key is None:
         log.warning(f"Matcher DEBUG: room '{room}' not in DB")
         return
-    group = GROUP_PREFIX + slugify(key)
+    group = _group_for(key, state.names("light"))
     members = (state.getattr(group) or {}).get("entity_id") or []
-    lines = [f"DEBUG {key}  group={state.get(group)}"]
+    lines = [f"DEBUG {key}  group={group}={state.get(group)}"]
     for lid in members:
         a = state.getattr(lid) or {}
         on = state.get(lid) == "on"

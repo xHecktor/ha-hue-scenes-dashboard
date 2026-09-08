@@ -20,6 +20,25 @@ FINGERPRINT_FILE = "/config/scene_fingerprints.json"
 GROUP_PREFIX = "light.dimmer_"
 
 
+def _group_for(room, lights_all):
+    """Resolve a room's light group entity, tolerating umlaut spelling.
+
+    HA's slugify turns 'Küche' into 'kuche', but a hand-named group may use
+    the German 'kueche'. Try slugify first, then the ue/oe/ae/ss variant.
+    Keep in sync with scene_match.py.
+    """
+    primary = GROUP_PREFIX + slugify(room)
+    if primary in lights_all:
+        return primary
+    de = room.lower()
+    for a, b in (("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss")):
+        de = de.replace(a, b)
+    alt = GROUP_PREFIX + slugify(de)
+    if alt in lights_all:
+        return alt
+    return primary
+
+
 @pyscript_compile
 def _read_json(path):
     import json, os
@@ -93,7 +112,7 @@ fields:
                 continue
             if room and slugify(rname) != slugify(room):
                 continue
-            group = GROUP_PREFIX + slugify(rname)
+            group = _group_for(rname, lights_all)
             if group not in lights_all:
                 log.warning(f"FINGERPRINT: {eid} skipped (no {group})")
                 continue
