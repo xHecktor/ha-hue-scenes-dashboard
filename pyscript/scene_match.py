@@ -94,13 +94,18 @@ def _fp_light(ml, is_on):
     if not is_on:
         return {"bri": 0, "off": True}
     rec = {"bri": ml.get("brightness"), "mode": ml.get("color_mode")}
-    if ml.get("color_mode") == "color_temp":
+    # Capture colour by what's actually reported, not by color_mode: a Hue lamp
+    # can momentarily report color_mode 'onoff' right after a scene change while
+    # color_temp_kelvin / xy are already populated. Trusting color_mode there
+    # stored a colourless 'onoff' entry that the matcher then skipped entirely.
+    if ml.get("color_mode") == "color_temp" and ml.get("color_temp_kelvin") is not None:
         rec["ct"] = ml.get("color_temp_kelvin")
-    else:
-        if ml.get("xy_color"):
-            rec["xy"] = list(ml.get("xy_color"))
-        if ml.get("hs_color"):
-            rec["hs"] = list(ml.get("hs_color"))
+    elif ml.get("xy_color"):
+        rec["xy"] = list(ml.get("xy_color"))
+    elif ml.get("color_temp_kelvin") is not None:
+        rec["ct"] = ml.get("color_temp_kelvin")
+    elif ml.get("hs_color"):
+        rec["hs"] = list(ml.get("hs_color"))
     return rec
 
 
@@ -124,8 +129,6 @@ def _scene_distance(lights):
     dsum = 0.0
     n = 0
     for lid, fp in lights.items():
-        if fp.get("mode") == "onoff":
-            continue
         attrs = state.getattr(lid) or {}
         # A member currently running its own dynamic palette (e.g. a light
         # shared with another room that is playing a dynamic scene there) is
@@ -142,6 +145,16 @@ def _scene_distance(lights):
         # entirely so only lights that are on somewhere weigh in.
         if not want_on and not is_on:
             continue
+        fp_bri = fp.get("bri")
+        # A pure on/off device (no brightness recorded, e.g. a smart plug or an
+        # on/off strip) can only inform via its state. When it's on in both it
+        # adds nothing, so don't let it dilute the average; count it only when
+        # the on/off state actually mismatches.
+        if fp_bri is None:
+            if want_on != is_on:
+                n += 1
+                dsum += 1.0
+            continue
         n += 1
         # On/off state is a hard signal and dominates. Crucially, we do NOT
         # read colour from an off light: many Hue lamps keep reporting their
@@ -150,7 +163,6 @@ def _scene_distance(lights):
         if want_on != is_on:
             dsum += 1.0
             continue
-        fp_bri = fp.get("bri") or 0
         cur_bri = attrs.get("brightness") or 0
         # Brightness distance on a log scale: perception is roughly
         # logarithmic, so a small absolute gap at the low end (e.g. 7 vs 23)

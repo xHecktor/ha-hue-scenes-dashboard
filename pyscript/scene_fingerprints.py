@@ -73,13 +73,18 @@ def _fp_light(ml, is_on):
     if not is_on:
         return {"bri": 0, "off": True}
     rec = {"bri": ml.get("brightness"), "mode": ml.get("color_mode")}
-    if ml.get("color_mode") == "color_temp":
+    # Capture colour by what's actually reported, not by color_mode: a Hue lamp
+    # can momentarily report color_mode 'onoff' right after a scene change while
+    # color_temp_kelvin / xy are already populated. Keep in sync with
+    # scene_match.py.
+    if ml.get("color_mode") == "color_temp" and ml.get("color_temp_kelvin") is not None:
         rec["ct"] = ml.get("color_temp_kelvin")
-    else:
-        if ml.get("xy_color"):
-            rec["xy"] = list(ml.get("xy_color"))
-        if ml.get("hs_color"):
-            rec["hs"] = list(ml.get("hs_color"))
+    elif ml.get("xy_color"):
+        rec["xy"] = list(ml.get("xy_color"))
+    elif ml.get("color_temp_kelvin") is not None:
+        rec["ct"] = ml.get("color_temp_kelvin")
+    elif ml.get("hs_color"):
+        rec["hs"] = list(ml.get("hs_color"))
     return rec
 
 
