@@ -217,12 +217,14 @@ def _scene_distance(lights):
         # apart. sqrt stays sensitive at both ends: 7 vs 23 -> 0.13, 90 vs 143
         # -> 0.15, while high-end noise (240 vs 255) stays small.
         d = abs(math.sqrt(fp_bri) - math.sqrt(cur_bri)) / 16.0
-        # Colour weight: a dim lamp reports colour unreliably (Hue's
-        # color_temp_kelvin jitters by hundreds of K at low brightness) and
-        # its tint is barely visible anyway, so scale the colour term by how
-        # bright the lamp actually is. Bright scenes stay fully colour-aware;
-        # dim scenes are told apart by brightness + on/off instead.
-        cw = min(fp_bri, cur_bri) / 255.0
+        # Colour weight scales the colour term by how bright the lamp is, so a
+        # dim lamp (whose colour is barely visible) is told apart mainly by
+        # brightness + on/off. But the two colour axes behave differently when
+        # dim: color_temp_kelvin jitters wildly at low brightness, so it keeps
+        # the aggressive linear weight; an xy colour point stays stable even at
+        # bri ~50-100, so it gets a gentler sqrt weight -- otherwise genuinely
+        # different colour scenes (a deep orange vs a pink at bri 75) collapsed.
+        base = min(fp_bri, cur_bri) / 255.0
         # Which colour axis to compare on. New fingerprints carry `pc`; older
         # ones stored only the primary axis, so fall back to whichever exists.
         pc = fp.get("pc")
@@ -232,10 +234,9 @@ def _scene_distance(lights):
             cur = attrs.get("color_temp_kelvin")
             # /1200: a ~190 K gap (Hell 2702 vs Lesen 2890) is a real, visible
             # difference; /2000 rated it 0.09 and the two stayed inseparable.
-            # Colour is already brightness-weighted, so tightening this doesn't
-            # hurt dim scenes (whose ct is noisy but down-weighted anyway).
-            d += cw * (1.0 if cur is None else abs(cur - fp["ct"]) / 1200.0)
+            d += base * (1.0 if cur is None else abs(cur - fp["ct"]) / 1200.0)
         elif pc == "xy":
+            cw = math.sqrt(base)
             cur = attrs.get("xy_color")
             if not cur:
                 d += cw * 1.0
@@ -244,6 +245,7 @@ def _scene_distance(lights):
                 dy = cur[1] - fp["xy"][1]
                 d += cw * (((dx * dx + dy * dy) ** 0.5) / 0.25)
         elif pc == "hs":
+            cw = math.sqrt(base)
             cur = attrs.get("hs_color")
             if not cur:
                 d += cw * 1.0
