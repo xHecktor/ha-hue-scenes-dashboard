@@ -95,17 +95,22 @@ def _scene_distance(lights):
         # so a foreign-dynamic light can never disturb this room's match.
         if attrs.get("dynamics") == "dynamic_palette":
             continue
-        n += 1
         is_on = state.get(lid) == "on"
         want_on = not fp.get("off")
+        # A light that is off in both the fingerprint and live is not a
+        # discriminating feature. Counting it would dilute the average and
+        # drown the lights that actually differ (e.g. two 1-lamp night scenes
+        # in a big room that differ only in that lamp's brightness). Skip it
+        # entirely so only lights that are on somewhere weigh in.
+        if not want_on and not is_on:
+            continue
+        n += 1
         # On/off state is a hard signal and dominates. Crucially, we do NOT
         # read colour from an off light: many Hue lamps keep reporting their
         # last color_temp_kelvin while off, which used to make an off light
         # look almost like an on one (only the brightness differed).
         if want_on != is_on:
             dsum += 1.0
-            continue
-        if not want_on:  # both off -> exact match
             continue
         fp_bri = fp.get("bri") or 0
         cur_bri = attrs.get("brightness") or 0
