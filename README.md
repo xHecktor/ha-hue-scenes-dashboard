@@ -143,6 +143,10 @@ until the live matcher's verdict is stable, and logs each run as
 PASS/FAIL, ending with a summary and the slowest stabilisation seen (a good
 basis for the matcher's settle). It only reads — it never changes the database.
 
+Because the Home Assistant log UI collapses repeated lines and hides most
+runs, the **full report is also written to `/config/scene_diagnose_report.txt`**
+(overwritten each run) — open that for the complete per-transition list.
+
 ## Per-room setup
 
 For each room:

@@ -26,9 +26,10 @@ Requires pyscript with `allow_all_imports: true`.
 import json
 from homeassistant.util import slugify
 
-VERSION = "d2"  # printed in the log so the running version is visible
+VERSION = "d3"  # printed in the log so the running version is visible
 
 FINGERPRINT_FILE = "/config/scene_fingerprints.json"
+REPORT_FILE = "/config/scene_diagnose_report.txt"
 TRACKER = "pyscript.scene_tracker"
 EXCLUDE_SUFFIXES = ("_naturliches_licht",)
 
@@ -40,6 +41,18 @@ def _read_json(path):
         return {}
     with open(path) as f:
         return json.load(f)
+
+
+@pyscript_compile
+def _write_text(path, text):
+    with open(path, "w") as f:
+        f.write(text)
+
+
+@pyscript_compile
+def _now():
+    import datetime
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _group_for(room, lights_all):
@@ -129,6 +142,10 @@ fields:
     fails = []
     slowest = 0.0
     slowest_what = "-"
+    # Every line is also collected here and written to REPORT_FILE at the end,
+    # because the HA log UI collapses repeated entries and hides most runs.
+    report = [f"scene_diagnose {VERSION}  {_now()}",
+              f"room={room or 'all'}  settle={settle}s", ""]
     log.warning(f"DIAGNOSE {VERSION}: start (room={room or 'all'}, settle={settle})")
 
     for rname, scenes in db.items():
@@ -168,8 +185,11 @@ fields:
         for s in (coolest, dimmest):
             if s and s not in sources:
                 sources.append(s)
-        log.warning(f"DIAGNOSE {rname}: {len(names)} scenes, "
-                    f"sources={[s.split('.')[-1] for s in sources]}")
+        src_short = []
+        for s in sources:
+            src_short.append(s.split(".")[-1])
+        report.append(f"[{rname}]  {len(names)} scenes  sources={src_short}")
+        log.warning(f"DIAGNOSE {rname}: {len(names)} scenes, sources={src_short}")
 
         for target in names:
             tshort = target.split(".")[-1]
@@ -188,14 +208,18 @@ fields:
                         slowest_what = f"{rname}: {sshort} -> {tshort}"
                     if det == target:
                         n_ok += 1
+                        report.append(f"  OK   {sshort:28} -> {tshort:28} {elapsed:.0f}s")
                         log.warning(f"DIAGNOSE  OK  {rname}: {sshort} -> {tshort} "
                                     f"(stable in {elapsed:.0f}s)")
                     else:
                         n_fail += 1
                         fails.append(f"{rname}: {sshort} -> {tshort} = {dshort} ({elapsed:.0f}s)")
+                        report.append(f"  FAIL {sshort:28} -> {tshort:28} "
+                                      f"erkannt: {dshort}  {elapsed:.0f}s")
                         log.warning(f"DIAGNOSE FAIL {rname}: {sshort} -> {tshort} "
                                     f"detected {dshort} (after {elapsed:.0f}s)")
                 except Exception as e:
+                    report.append(f"  ERR  {sshort} -> {tshort}: {e}")
                     log.error(f"DIAGNOSE error {rname} {sshort}->{tshort}: {e}")
 
     summary = (f"DIAGNOSE done: {n_ok} OK, {n_fail} FAIL | "
@@ -203,3 +227,10 @@ fields:
     if fails:
         summary += "".join(f"\n  FAIL {f}" for f in fails)
     log.warning(summary)
+    report.append("")
+    report.append(f"{n_ok} OK, {n_fail} FAIL   slowest {slowest:.0f}s ({slowest_what})")
+    try:
+        task.executor(_write_text, REPORT_FILE, "\n".join(report) + "\n")
+        log.warning(f"DIAGNOSE report written to {REPORT_FILE}")
+    except Exception as e:
+        log.error(f"DIAGNOSE could not write report: {e}")
