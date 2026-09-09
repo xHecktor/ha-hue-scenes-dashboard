@@ -78,8 +78,8 @@ marks scenes that support dynamic mode.
      allow_all_imports: true
      hass_is_global: true
    ```
-   Copy `pyscript/scene_fingerprints.py` and `pyscript/scene_match.py` to
-   `/config/pyscript/`.
+   Copy `pyscript/scene_fingerprints.py`, `pyscript/scene_match.py` and
+   (optional) `pyscript/scene_diagnose.py` to `/config/pyscript/`.
 2. **Backend** — copy `packages/hue_scenes.yaml` to `/config/packages/`
    (enable packages) or merge its blocks into your config.
 3. **Frontend** — put the `decluttering_templates:` block from
@@ -123,6 +123,25 @@ control, so it carries the flag forward).
 For a dashboard-friendly version, add `lovelace/calibration_card.yaml` — a
 room picker (or "Alle Räume") with a **Kalibrieren** button and a live status
 line fed by the `pyscript.calibration` entity.
+
+## Diagnose (optional)
+
+`pyscript/scene_diagnose.py` adds a `pyscript.scene_diagnose` action that
+verifies detection automatically instead of clicking through scenes by hand:
+
+```yaml
+action: pyscript.scene_diagnose
+data:
+  room: Flur          # or empty for the whole home
+```
+
+It drives every static scene **from two contrasting source scenes** (the
+coolest and the dimmest in the room — the transitions that expose a lamp
+reporting its colour temperature with a lag), waits a **self-adjusting** time
+until the live matcher's verdict is stable, and logs each run as
+`source -> target`, the detected scene, the seconds it took to stabilise and
+PASS/FAIL, ending with a summary and the slowest stabilisation seen (a good
+basis for the matcher's settle). It only reads — it never changes the database.
 
 ## Per-room setup
 

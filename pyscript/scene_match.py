@@ -13,7 +13,7 @@ import math
 import time
 from homeassistant.util import slugify
 
-VERSION = "v11"  # bumped on every change; printed in the log to confirm what runs
+VERSION = "v12"  # bumped on every change; printed in the log to confirm what runs
 
 FINGERPRINT_FILE = "/config/scene_fingerprints.json"
 DYNAMIC_SENSOR = "sensor.dynamische_szenen"
@@ -636,66 +636,6 @@ def scene_match_room(room=None, **kwargs):
     line = _update_room(key, FP[key], _ar(), lights_all, result)
     state.set(TRACKER, "ok", active_scene=result)
     log.warning("Matcher " + (line or key))
-
-
-@service
-def scene_selftest(room=None, settle=6, **kwargs):
-    """yaml
-name: Self-test scene detection
-description: Activate every (static) scene in turn, let it settle, and check
-  the matcher identifies it. Logs a PASS/FAIL line per scene and a summary --
-  an automated end-to-end check of both the fingerprints and the matcher, so
-  you don't have to click through scenes by hand. The lights flash through
-  every scene, like calibration.
-fields:
-  room:
-    description: Only this room (group_name). Empty = whole home.
-    example: Flur
-  settle:
-    description: Seconds to wait per scene before checking
-    example: 6
-"""
-    if not FP:
-        _load()
-    task.unique("scene_selftest")
-    lights_all = state.names("light")
-    npass = 0
-    nfail = 0
-    fails = []
-    log.warning(f"SELFTEST {VERSION}: start (room={room or 'all'})")
-    for rname, scenes in FP.items():
-        if room and slugify(rname) != slugify(room):
-            continue
-        group = _group_for(rname, lights_all)
-        if not group or group not in lights_all:
-            continue
-        members = (state.getattr(group) or {}).get("entity_id") or []
-        for sc in scenes:
-            if _excluded(sc):
-                continue
-            try:
-                scene.turn_on(entity_id=sc)
-                _wait_settled(members, settle)
-                ranked = _ranked(scenes)
-                if not ranked:
-                    continue
-                best_d, best = ranked[0]
-                second = ""
-                if len(ranked) > 1:
-                    second = f"  2nd {ranked[1][1].split('.')[-1]}={round(ranked[1][0], 2)}"
-                short = sc.split(".")[-1]
-                got = best.split(".")[-1]
-                if best == sc:
-                    npass += 1
-                    log.warning(f"SELFTEST  OK  {rname}/{short}={round(best_d, 2)}{second}")
-                else:
-                    nfail += 1
-                    fails.append(f"{rname}/{short} -> {got}={round(best_d, 2)}{second}")
-                    log.warning(f"SELFTEST FAIL {rname}/{short} -> {got}={round(best_d, 2)}{second}")
-            except Exception as e:
-                log.error(f"SELFTEST error at {sc}: {e}")
-    log.warning(f"SELFTEST {VERSION} done: {npass} OK, {nfail} FAIL"
-                + ("".join(f"\n  FAIL {f}" for f in fails) if fails else ""))
 
 
 @state_trigger(f"{DYNAMIC_SENSOR}")
