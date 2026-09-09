@@ -17,11 +17,15 @@ entities:
     name: Einschwingzeit
   - entity: input_boolean.calibrate_contrast
     name: Kontrast-Modus (gründlich)
+  # State value is the live counter ("3/11"); the label attribute carries the
+  # detailed line (room, scene, remaining estimate).
+  - entity: pyscript.calibration
+    name: Fortschritt
+    icon: mdi:fingerprint
   - type: attribute
     entity: pyscript.calibration
     attribute: label
     name: Status
-    icon: mdi:fingerprint
 footer:
   type: buttons
   entities:
