@@ -43,6 +43,14 @@ input_text:
     max: 255
     initial: ""
 
+  # Live calibration progress line ("Küche: Ruhephase — 3/11 · noch ~0:32 min").
+  # Written by scene_fingerprint_calibrate; an input_text renders reliably live
+  # on the dashboard (a pyscript.* entity's updates do not always refresh a card).
+  calibrate_progress:
+    name: Calibration progress
+    max: 255
+    initial: "idle"
+
 
 input_number:
   # --- Dashboard controls (brightness tier thresholds + swipe tuning) ---

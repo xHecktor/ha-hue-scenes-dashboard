@@ -58,15 +58,20 @@ def _status(label, running, done=None, total=None, eta=None):
         attrs["percent"] = round(100.0 * done / total) if total else 0
     if eta is not None:
         attrs["eta_seconds"] = int(eta)
-    # The STATE VALUE itself carries the progress ("3/11"), not just the label:
-    # an open Lovelace card reliably re-renders on a state-value change, but not
-    # always on an attribute-only change -- which is why the counter looked
-    # stuck at 0/N and only jumped to "fertig".
+    # The STATE VALUE itself carries the progress ("3/11"), not just the label.
     if running and total:
         value = f"{done}/{total}"
     else:
         value = "running" if running else "idle"
     state.set("pyscript.calibration", value, **attrs)
+    # Also mirror the full text into an input_text: a pyscript.* entity's
+    # updates do not reliably refresh a Lovelace card mid-run, an input_text
+    # always does. This is what the calibration card actually displays.
+    try:
+        input_text.set_value(entity_id="input_text.calibrate_progress",
+                             value=label[:255])
+    except Exception:
+        pass
 
 
 def _fmt_eta(sec):
