@@ -14,6 +14,42 @@ import json
 from homeassistant.util import slugify
 
 FINGERPRINT_FILE = "/config/scene_fingerprints.json"
+CALIB_LOG = "/config/scene_calibrate_log.txt"
+
+# Hue-bridge protection: every scene/light command from every worker passes
+# through one gate that spaces commands by at least this many seconds, so
+# running several rooms in parallel can never flood the bridge or outrun the
+# Zigbee radio / HA state updates.
+MIN_CMD_INTERVAL = 0.25
+_cmd_busy = [False]     # list holders = module-mutable without `global`
+_writing = [False]      # serialises DB file writes across parallel workers
+_scene_count = [0]      # scenes finished (for the dashboard status)
+
+
+@pyscript_compile
+def _clog_init(path, room, contrast, parallel):
+    import datetime
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(f"scene_calibrate  {datetime.datetime.now():%Y-%m-%d %H:%M:%S}\n")
+            f.write(f"room={room or 'all'}  contrast={contrast}  parallel={parallel}\n\n")
+            f.flush()
+        return True
+    except Exception as e:
+        log.error(f"CALIB: cannot init log {path}: {e}")
+        return False
+
+
+@pyscript_compile
+def _clog(path, line):
+    # Append one line and flush immediately, so nothing is lost on a crash.
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+            f.flush()
+    except Exception:
+        pass
+
 
 def _group_for(room, lights_all):
     """Resolve a room's (or zone's) native Hue group light, or None. Keep in
@@ -155,60 +191,163 @@ def _capture(members):
     return e
 
 
-def _prime(members, warm):
-    # Force every member into a deliberately extreme state (warm+bright vs
-    # cool+dim, or on vs off for pure on/off devices) BEFORE activating the
-    # scene. Running the scene once from each opposite starting point and
-    # diffing the settled results reveals which lamps the scene actually
-    # controls: a controlled lamp converges to the same value both times, an
-    # uncontrolled one keeps whatever it was primed to.
-    for lid in members:
-        try:
-            a = state.getattr(lid) or {}
-            modes = a.get("supported_color_modes") or []
-            if "color_temp" in modes:
-                light.turn_on(entity_id=lid, transition=0,
-                              brightness=230 if warm else 30,
-                              color_temp_kelvin=2200 if warm else 6000)
-            elif "xy" in modes or "hs" in modes:
-                light.turn_on(entity_id=lid, transition=0,
-                              brightness=230 if warm else 30,
-                              rgb_color=[255, 120, 0] if warm else [0, 120, 255])
-            elif "brightness" in modes:
-                light.turn_on(entity_id=lid, transition=0,
-                              brightness=230 if warm else 30)
-            else:  # pure on/off device -> the only contrast it can show is on/off
-                if warm:
-                    light.turn_on(entity_id=lid)
-                else:
-                    light.turn_off(entity_id=lid)
-        except Exception as e:
-            log.warning(f"FINGERPRINT: prime {lid} failed: {e}")
+# --------------------------------------------------------------------------
+# Throttled Hue commands (one shared gate for all parallel workers).
+# --------------------------------------------------------------------------
+
+def _gate_acquire():
+    while _cmd_busy[0]:
+        task.sleep(0.05)
+    _cmd_busy[0] = True
 
 
-def _controlled(ra, rb):
-    # True if the two contrast runs agree closely enough that the scene clearly
-    # drove this lamp to a fixed state; False if the lamp just held its primed
-    # value (i.e. the scene does not control it -> mark it don't-care).
-    if ra.get("off") and rb.get("off"):
-        return True
+def _gate_release():
+    # Hold the gate for the spacing interval so the NEXT command is delayed --
+    # this is what caps the global command rate and protects the bridge.
+    task.sleep(MIN_CMD_INTERVAL)
+    _cmd_busy[0] = False
+
+
+def _gated_scene(eid):
+    _gate_acquire()
+    try:
+        scene.turn_on(entity_id=eid)
+    except Exception as e:
+        log.warning(f"CALIB: scene {eid} failed: {e}")
+    _gate_release()
+
+
+def _gated_light(**kw):
+    _gate_acquire()
+    try:
+        light.turn_on(**kw)
+    except Exception as e:
+        log.warning(f"CALIB: light cmd failed: {e}")
+    _gate_release()
+
+
+def _prime_group(group, warm):
+    # Prime ALL members with one/two group commands (far gentler on the bridge
+    # than per-lamp). Brightness contrast (bright vs dim) + a colour-temp nudge
+    # (warm vs cool; ignored by brightness-only members). Running the scene from
+    # each opposite prime and diffing per attribute reveals what it controls.
+    _gated_light(entity_id=group, transition=0, brightness=230 if warm else 30)
+    _gated_light(entity_id=group, transition=0,
+                 color_temp_kelvin=2200 if warm else 6000)
+
+
+def _uncontrolled_attrs(ra, rb):
+    # Compare the two contrast passes PER attribute. Returns the list of
+    # attributes the scene did NOT drive to the same value -> uncontrolled;
+    # ["on"] if even the on/off state was left free (full wildcard); [] if the
+    # scene controls everything.
     if bool(ra.get("off")) != bool(rb.get("off")):
-        return False
+        return ["on"]
+    if ra.get("off") and rb.get("off"):
+        return []
+    un = []
     if abs((ra.get("bri") or 0) - (rb.get("bri") or 0)) > 40:
-        return False
+        un.append("bri")
     if "ct" in ra and "ct" in rb:
         if abs(ra["ct"] - rb["ct"]) > 300:
-            return False
-    elif "xy" in ra and "xy" in rb:
+            un.append("ct")
+    if "xy" in ra and "xy" in rb:
         dx = ra["xy"][0] - rb["xy"][0]
         dy = ra["xy"][1] - rb["xy"][1]
         if (dx * dx + dy * dy) ** 0.5 > 0.05:
-            return False
-    return True
+            un.append("xy")
+    return un
+
+
+def _save_db(db):
+    # Serialise DB writes so two parallel workers never clobber the file.
+    while _writing[0]:
+        task.sleep(0.1)
+    _writing[0] = True
+    task.executor(_write_json, FINGERPRINT_FILE, db)
+    _writing[0] = False
+
+
+def _calibrate_scene(group, members, eid, settle, contrast):
+    if not contrast:
+        _gated_scene(eid)
+        _wait_settled(members, settle)
+        return _capture(members)
+    # Contrast: activate the scene from a warm+bright prime and again from a
+    # cool+dim prime; per attribute, values that end up different are the ones
+    # the scene does not control.
+    _prime_group(group, True)
+    task.sleep(1.5)
+    _gated_scene(eid)
+    _wait_settled(members, settle)
+    run_a = _capture(members)
+    _prime_group(group, False)
+    task.sleep(1.5)
+    _gated_scene(eid)
+    _wait_settled(members, settle)
+    run_b = _capture(members)
+    entry = {}
+    for lid, rb in run_b.items():
+        ra = run_a.get(lid)
+        if ra is not None:
+            un = _uncontrolled_attrs(ra, rb)
+            if un == ["on"]:
+                rb = dict(rb)
+                rb["dontcare"] = True
+            elif un:
+                rb = dict(rb)
+                rb["dontcare"] = un
+        entry[lid] = rb
+    return entry
+
+
+def _calibrate_room(rname, group, scene_list, settle, contrast, db):
+    members = (state.getattr(group) or {}).get("entity_id") or []
+    db[rname] = {}
+    _clog(CALIB_LOG, f"[{rname}] start  group={group}  {len(scene_list)} scenes")
+    for eid, name in scene_list:
+        try:
+            entry = _calibrate_scene(group, members, eid, settle, contrast)
+            db[rname][eid] = entry
+            _scene_count[0] += 1
+            dcs = []
+            for lid, r in entry.items():
+                v = r.get("dontcare")
+                if v is True:
+                    dcs.append(f"{lid.split('.')[-1]}=ALL")
+                elif v:
+                    dcs.append(f"{lid.split('.')[-1]}={'+'.join(v)}")
+            line = f"  {rname}: {name}  ({len(entry)} lamps)"
+            if dcs:
+                line += "  don't-care: " + "; ".join(dcs)
+            _clog(CALIB_LOG, line)
+            _status(f"{rname}: {name} ({_scene_count[0]})", True)
+            log.warning(f"CALIB {rname}: {name}" + (f"  dc={dcs}" if dcs else ""))
+        except Exception as e:
+            _clog(CALIB_LOG, f"  {rname}: {name}  ERROR {e}")
+            log.error(f"CALIB {rname} {eid}: {e}")
+    _save_db(db)          # crash-safe: the room's results are on disk now
+    _clog(CALIB_LOG, f"[{rname}] done, saved")
+
+
+def _calib_worker(queue, rooms, settle, contrast, db, done):
+    while queue:
+        rname = queue.pop()
+        try:
+            info = rooms[rname]
+            _calibrate_room(rname, info["group"], info["scenes"], settle, contrast, db)
+        except Exception as e:
+            log.error(f"CALIB worker {rname}: {e}")
+            _clog(CALIB_LOG, f"[{rname}] WORKER ERROR {e}")
+    done[0] += 1
+
+
+_CALIB_TASK = None
+_CALIB_WORKERS = []
 
 
 @service
-def scene_fingerprint_calibrate(room=None, settle=4, contrast=False):
+def scene_fingerprint_calibrate(room=None, settle=4, contrast=False, parallel=1):
     """yaml
 name: Calibrate scene fingerprints
 fields:
@@ -220,13 +359,31 @@ fields:
       lamp's colour is still drifting when recorded)
     example: 4
   contrast:
-    description: Slow, thorough mode -- run each scene twice from opposite
-      starting states to detect lamps the scene does not actually control
-      (marked don't-care and ignored when matching). ~2x the flashing.
+    description: Thorough mode -- run each scene twice from opposite states and
+      detect, per attribute, what the scene does NOT control (marked don't-care
+      and ignored when matching). ~2x the flashing.
     example: false
+  parallel:
+    description: How many rooms to calibrate at once (whole-home only). Commands
+      are rate-limited to protect the bridge, so this mainly overlaps the settle
+      waits. 1 = sequential.
+    example: 3
 """
-    log.warning(f"FINGERPRINT: start (room={room or 'all'}, contrast={contrast})")
+    global _CALIB_TASK
+    _CALIB_TASK = task.create(_calibrate_run, room, settle, contrast, parallel)
+    log.warning(f"CALIB spawned (room={room or 'all'}, contrast={contrast}, "
+                f"parallel={parallel}) -> log {CALIB_LOG}")
+
+
+def _calibrate_run(room=None, settle=4, contrast=False, parallel=1):
+    task.unique("scene_calibrate")
+    _cmd_busy[0] = False
+    _writing[0] = False
+    _scene_count[0] = 0
+    _clog_init(CALIB_LOG, room, contrast, parallel)
     _status(f"Kalibriere {room or 'alle Räume'} …", True)
+    log.warning(f"CALIB worker started (room={room or 'all'}, contrast={contrast})")
+
     db = task.executor(_read_json, FINGERPRINT_FILE)
     if room:
         for k in list(db.keys()):
@@ -236,59 +393,51 @@ fields:
         db = {}
 
     lights_all = state.names("light")
-    count = 0
-
+    rooms = {}
     for eid in state.names("scene"):
-        try:
-            attrs = state.getattr(eid) or {}
-            if attrs.get("group_type") not in ("room", "zone"):
-                continue
-            rname = attrs.get("group_name")
-            if not rname:
-                continue
-            if room and slugify(rname) != slugify(room):
-                continue
-            group = _group_for(rname, lights_all)
-            if group not in lights_all:
-                log.warning(f"FINGERPRINT: {eid} skipped (no {group})")
-                continue
+        a = state.getattr(eid) or {}
+        if a.get("group_type") not in ("room", "zone"):
+            continue
+        rn = a.get("group_name")
+        if not rn:
+            continue
+        if room and slugify(rn) != slugify(room):
+            continue
+        g = _group_for(rn, lights_all)
+        if g not in lights_all:
+            _clog(CALIB_LOG, f"[{rn}] skipped (no Hue group)")
+            continue
+        rooms.setdefault(rn, {"group": g, "scenes": []})
+        rooms[rn]["scenes"].append((eid, a.get("name") or eid))
 
-            members = (state.getattr(group) or {}).get("entity_id") or []
+    total = 0
+    for rn in rooms:
+        total += len(rooms[rn]["scenes"])
+    _clog(CALIB_LOG, f"{len(rooms)} rooms, {total} scenes\n")
 
-            if contrast:
-                # Two passes from opposite primed states; a lamp that ends up
-                # different between them is not controlled by this scene.
-                _prime(members, True)
-                task.sleep(1.5)
-                scene.turn_on(entity_id=eid)
-                _wait_settled(members, settle)
-                run_a = _capture(members)
-                _prime(members, False)
-                task.sleep(1.5)
-                scene.turn_on(entity_id=eid)
-                _wait_settled(members, settle)
-                run_b = _capture(members)
-                entry = {}
-                for lid, rb in run_b.items():
-                    ra = run_a.get(lid)
-                    if ra is not None and not _controlled(ra, rb):
-                        rb = dict(rb)
-                        rb["dontcare"] = True
-                    entry[lid] = rb
-            else:
-                scene.turn_on(entity_id=eid)
-                _wait_settled(members, settle)
-                entry = _capture(members)
+    queue = list(rooms.keys())
+    nworkers = int(parallel) if parallel else 1
+    if nworkers < 1:
+        nworkers = 1
+    if nworkers > len(queue):
+        nworkers = max(1, len(queue))
 
-            db.setdefault(rname, {})[eid] = entry
-            count += 1
-            dc = sum(1 for r in entry.values() if r.get("dontcare"))
-            dctxt = f", {dc} don't-care" if dc else ""
-            _status(f"{rname}: {attrs.get('name') or eid} ({count})", True)
-            log.warning(f"FINGERPRINT: {eid} ({len(entry)} lights{dctxt})")
-        except Exception as e:
-            log.error(f"FINGERPRINT: error at {eid}: {e}")
+    if nworkers == 1:
+        while queue:
+            rn = queue.pop()
+            info = rooms[rn]
+            _calibrate_room(rn, info["group"], info["scenes"], settle, contrast, db)
+    else:
+        done = [0]
+        global _CALIB_WORKERS
+        _CALIB_WORKERS = []
+        for _ in range(nworkers):
+            _CALIB_WORKERS.append(
+                task.create(_calib_worker, queue, rooms, settle, contrast, db, done))
+        while done[0] < nworkers:
+            task.sleep(0.5)
 
-    task.executor(_write_json, FINGERPRINT_FILE, db)
-    _status(f"Fertig – {count} Szenen ({room or 'alle'})", False)
-    log.warning(f"FINGERPRINT: done, {count} scenes stored")
+    _save_db(db)
+    _status(f"Fertig – {_scene_count[0]} Szenen ({room or 'alle'})", False)
+    _clog(CALIB_LOG, f"\nDONE: {_scene_count[0]} scenes")
+    log.warning(f"CALIB done, {_scene_count[0]} scenes")
