@@ -17,7 +17,7 @@ entities:
     name: Einschwingzeit
   - entity: input_boolean.calibrate_contrast
     name: Kontrast-Modus (gründlich)
-  # Live status line: "Küche: Ruhephase — 3/11 · noch ~0:32 min".
+  # Live status line, counts up scene by scene: "Küche: Ruhephase (3)".
   - type: attribute
     entity: pyscript.calibration
     attribute: label
