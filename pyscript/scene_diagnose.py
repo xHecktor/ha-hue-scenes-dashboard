@@ -11,7 +11,7 @@ import json
 from homeassistant.util import slugify
 
 
-VERSION = "d7"
+VERSION = "d8"
 
 # Strong reference to the background task so it isn't garbage-collected
 # (and cancelled) the moment the service function returns.
@@ -176,7 +176,7 @@ def _live_str(members):
 def _wait_stable_match(
     room,
     members,
-    min_wait=3.0,
+    min_wait=10.0,
     max_wait=45.0,
     need=3,
 ):
@@ -185,6 +185,12 @@ def _wait_stable_match(
 
     Poll the matcher's verdict once a second until it holds steady
     for `need` reads, or max_wait is reached.
+
+    min_wait must exceed the matcher's OWN settle (SETTLE_AFTER_CHANGE +
+    SETTLE_MAX, up to ~9 s). Otherwise we can read the tracker while it
+    still holds the SOURCE scene, see that stale value hold steady for a
+    few reads, and wrongly report a FAIL before the matcher ever
+    re-evaluated (that made fast 4 s "FAILs" that were really artefacts).
 
     Returns:
         (detected_scene, seconds_waited)
