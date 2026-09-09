@@ -13,6 +13,8 @@ import math
 import time
 from homeassistant.util import slugify
 
+VERSION = "v9"  # bumped on every change; printed in the log to confirm what runs
+
 FINGERPRINT_FILE = "/config/scene_fingerprints.json"
 DYNAMIC_SENSOR = "sensor.dynamische_szenen"
 TRACKER = "pyscript.scene_tracker"
@@ -46,7 +48,7 @@ KEEP_MARGIN = 0.10   # keep current scene only while within this of the best
 LOCK_SECONDS = 30    # after a user tap, don't override the room for this long
 LOOP_SECONDS = 15    # background re-evaluation interval (backstop; events drive speed)
 SETTLE_AFTER_CHANGE = 1.5  # min wait after the last change before matching
-SETTLE_MAX = 14.0          # cap on the extra wait-until-lights-hold-still
+SETTLE_MAX = 8.0           # cap on the extra wait-until-lights-hold-still
 # Scene distance is the MEAN of the per-lamp distances (robust: no single lamp
 # dominates) blended with the single largest per-lamp distance:
 #   distance = (1 - w) * mean + w * max
@@ -59,6 +61,15 @@ SETTLE_MAX = 14.0          # cap on the extra wait-until-lights-hold-still
 # itself at ~0. Set to 0 for pure mean; raise toward ~0.5 for even tighter
 # separation at the cost of a single noisy lamp mattering more.
 BLEND_WEIGHT = 0.3
+# Cap on a single lamp's colour-temperature distance term. A laggy Hue lamp can
+# keep reporting the PREVIOUS scene's ct for many seconds after a change (its
+# brightness updates at once), and an uncapped ct term then dominates and picks
+# whichever scene happens to share that stale ct (e.g. a dim room still reading
+# ct4000 matches "Nachtlicht" instead of the warm "Ruhephase" it just became).
+# Capping it lets the reliable brightness decide such cases, while genuine small
+# ct differences (Hell 2702 vs Lesen 2890 -> 0.157) stay well under the cap and
+# are unaffected.
+CT_TERM_CAP = 0.20
 EXCLUDE_SUFFIXES = ("_naturliches_licht",)  # adaptive scenes to ignore
 
 FP = {}
@@ -177,7 +188,7 @@ def _load():
     total = 0
     for v in FP.values():
         total += len(v)
-    log.warning(f"Matcher: {total} fingerprints loaded")
+    log.warning(f"Matcher {VERSION}: {total} fingerprints loaded")
 
 
 def _excluded(sc):
@@ -285,7 +296,8 @@ def _scene_distance(lights):
             # difference; /2000 rated it 0.09 and the two stayed inseparable.
             # ct jitters when dim, so it keeps the aggressive linear brightness
             # weight; xy/hs stay stable when dim and get a gentler sqrt weight.
-            d += base * (abs(live["ct"] - fp["ct"]) / 1200.0)
+            # Capped so a stale (laggy) ct can't dominate -- see CT_TERM_CAP.
+            d += min(base * (abs(live["ct"] - fp["ct"]) / 1200.0), CT_TERM_CAP)
         elif axis == "xy":
             cw = math.sqrt(base)
             cur = live["xy"]
@@ -489,7 +501,7 @@ def scene_match_all(**kwargs):
             dbg.append(line)
     if result != before:
         state.set(TRACKER, "ok", active_scene=result)
-        log.warning("Matcher " + " | ".join(dbg))
+        log.warning(f"Matcher {VERSION} " + " | ".join(dbg))
 
 
 @service
@@ -653,14 +665,6 @@ def _on_light_change(**kwargs):
     prev = None
     waited = 0.0
     while waited < SETTLE_MAX:
-        # Nudge laggy lamps to report their real state. Some Hue lamps keep
-        # reporting a stale colour temperature for many seconds after a scene
-        # change; the calibration unsticks this with a forced refresh, and the
-        # live matcher MUST do the same -- otherwise it settles on a
-        # mid-transition read (dim + still-cool = a night scene) and stays there
-        # (this was ruhephase-from-kühl-hell showing as nachtlicht in the Flur).
-        on_now = [lid for lid in state.names("light") if state.get(lid) == "on"]
-        _force_refresh(on_now)
         snap = _light_snapshot()
         if snap == prev:
             break
@@ -672,7 +676,7 @@ def _on_light_change(**kwargs):
 
 @time_trigger("startup")
 def _loop():
-    log.warning("Matcher loop started")
+    log.warning(f"Matcher loop started {VERSION}")
     while True:
         try:
             scene_match_all()
