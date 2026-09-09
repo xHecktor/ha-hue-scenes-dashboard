@@ -11,7 +11,7 @@ import json
 from homeassistant.util import slugify
 
 
-VERSION = "d8"
+VERSION = "d9"
 
 # Strong reference to the background task so it isn't garbage-collected
 # (and cancelled) the moment the service function returns.
@@ -171,6 +171,76 @@ def _live_str(members):
             )
 
     return " ".join(parts)
+
+
+def _snapshot(members):
+    # Coarse per-lamp state (on, brightness, ct bucketed to 25 K), used to
+    # detect when the lights have stopped transitioning.
+    snap = []
+    for lid in members:
+        a = state.getattr(lid) or {}
+        on = state.get(lid) == "on"
+        ct = a.get("color_temp_kelvin")
+        snap.append((
+            lid,
+            on,
+            a.get("brightness") if on else 0,
+            (ct // 25 if ct else -1),
+        ))
+    return snap
+
+
+def _measure(room, members, min_verdict=10.0, max_wait=25.0):
+    # ONE polling loop that captures the raw data we need to tune the matcher:
+    #   * light_secs   -- when the physical lights stopped changing (the REAL
+    #                     transition time; laggy lamps make this large)
+    #   * verdict_secs -- when the matcher's verdict stopped changing
+    #   * det          -- the settled verdict
+    #   * start / end  -- live per-lamp values right after the switch and once
+    #                     settled (shows the transient and the resting state)
+    # Nudges laggy lamps with a forced refresh each second. min_verdict must
+    # exceed the matcher's own settle (~9 s) so a still-stale verdict isn't
+    # trusted.
+    start = _live_str(members)
+    last_snap = None
+    light_stable = 0
+    light_secs = None
+    last_verdict = "<init>"
+    verdict_stable = 0
+    waited = 0.0
+    while waited < max_wait:
+        try:
+            homeassistant.update_entity(entity_id=members)
+        except Exception:
+            pass
+        task.sleep(1.0)
+        waited += 1.0
+        snap = _snapshot(members)
+        if snap == last_snap:
+            light_stable += 1
+        else:
+            light_stable = 0
+            last_snap = snap
+        if light_secs is None and light_stable >= 2:
+            light_secs = waited
+        det = _detected(room)
+        if det == last_verdict:
+            verdict_stable += 1
+        else:
+            verdict_stable = 0
+            last_verdict = det
+        if (light_secs is not None
+                and verdict_stable >= 3
+                and waited >= min_verdict):
+            break
+    end = _live_str(members)
+    return (
+        last_verdict,
+        light_secs if light_secs is not None else waited,
+        waited,
+        start,
+        end,
+    )
 
 
 def _wait_stable_match(
@@ -504,105 +574,52 @@ def _diagnose_run(
                     # Set target scene.
                     # --------------------------------------------
 
-                    scene.turn_on(
-                        entity_id=target
-                    )
+                    scene.turn_on(entity_id=target)
 
-                    # --------------------------------------------
-                    # Wait for matcher to stabilize.
-                    # --------------------------------------------
+                    # One measurement pass captures verdict + real settle time
+                    # + start/end lamp values (the data we tune the matcher on).
+                    det, light_secs, verdict_secs, start_state, end_state = \
+                        _measure(rname, members)
+                    dshort = (det or "-").split(".")[-1]
+                    ok = det == target
 
-                    det, elapsed = _wait_stable_match(
-                        rname,
-                        members,
-                    )
+                    # "slowest" now tracks the REAL light-settle time -- the
+                    # value that should inform the matcher's settle window.
+                    if light_secs > slowest:
+                        slowest = light_secs
+                        slowest_what = f"{rname}: {sshort} -> {tshort}"
 
-                    dshort = (
-                        (det or "-")
-                        .split(".")[-1]
-                    )
-
-                    # --------------------------------------------
-                    # Track slowest transition.
-                    # --------------------------------------------
-
-                    if elapsed > slowest:
-                        slowest = elapsed
-
-                        slowest_what = (
-                            f"{rname}: "
-                            f"{sshort} -> "
-                            f"{tshort}"
-                        )
-
-                    # --------------------------------------------
-                    # PASS
-                    # --------------------------------------------
-
-                    if det == target:
-
+                    if ok:
                         n_ok += 1
-
-                        log.warning(
-                            f"DIAGNOSE OK {rname}: "
-                            f"{sshort} -> {tshort} "
-                            f"(stable in "
-                            f"{elapsed:.0f}s)"
-                        )
-
-                        _write_report_line(
-                            REPORT_FILE,
-                            f"  OK   "
-                            f"{sshort:28} -> "
-                            f"{tshort:28} "
-                            f"{elapsed:.0f}s",
-                        )
-
-                    # --------------------------------------------
-                    # FAIL
-                    # --------------------------------------------
-
+                        tag = "OK  "
                     else:
-
                         n_fail += 1
-
-                        live = _live_str(
-                            members
-                        )
-
-                        fail_text = (
-                            f"{rname}: "
-                            f"{sshort} -> "
-                            f"{tshort} = "
-                            f"{dshort} "
-                            f"({elapsed:.0f}s)"
-                        )
-
+                        tag = "FAIL"
                         fails.append(
-                            fail_text
+                            f"{rname}: {sshort} -> {tshort} = {dshort}"
                         )
 
-                        log.warning(
-                            f"DIAGNOSE FAIL {rname}: "
-                            f"{sshort} -> {tshort} "
-                            f"detected {dshort} "
-                            f"({elapsed:.0f}s) "
-                            f"live: {live}"
-                        )
+                    log.warning(
+                        f"DIAGNOSE {tag} {rname}: {sshort} -> {tshort} "
+                        f"lights={light_secs:.0f}s verdict={dshort}"
+                    )
 
-                        _write_report_line(
-                            REPORT_FILE,
-                            f"  FAIL "
-                            f"{sshort:28} -> "
-                            f"{tshort:28} "
-                            f"erkannt: {dshort}  "
-                            f"{elapsed:.0f}s",
-                        )
-
-                        _write_report_line(
-                            REPORT_FILE,
-                            f"       live: {live}",
-                        )
+                    # Full per-transition record: source->target, real settle
+                    # time, and the live lamp values at start and at rest.
+                    _write_report_line(
+                        REPORT_FILE,
+                        f"  {tag} {sshort:26} -> {tshort:26} "
+                        f"lights={light_secs:.0f}s verdict={verdict_secs:.0f}s"
+                        + ("" if ok else f"  MISREAD as {dshort}"),
+                    )
+                    _write_report_line(
+                        REPORT_FILE,
+                        f"       start: {start_state}",
+                    )
+                    _write_report_line(
+                        REPORT_FILE,
+                        f"       end:   {end_state}",
+                    )
 
                 except Exception as e:
 
