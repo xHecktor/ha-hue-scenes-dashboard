@@ -13,7 +13,7 @@ import math
 import time
 from homeassistant.util import slugify
 
-VERSION = "v13"  # bumped on every change; printed in the log to confirm what runs
+VERSION = "v14"  # bumped on every change; printed in the log to confirm what runs
 
 FINGERPRINT_FILE = "/config/scene_fingerprints.json"
 DYNAMIC_SENSOR = "sensor.dynamische_szenen"
@@ -223,11 +223,15 @@ def _light_snapshot():
 def _scene_distance(lights):
     dists = []
     for lid, fp in lights.items():
-        # A lamp a contrast calibration proved this scene does NOT control
-        # (flagged `dontcare`) holds whatever the previous scene left behind,
-        # so it is not a feature of this scene -> never let it weigh in.
-        if fp.get("dontcare"):
+        # `dontcare` marks what a contrast calibration proved this scene does
+        # NOT control. Legacy value True = the whole lamp is a wildcard (it
+        # holds whatever the previous scene left) -> ignore it. A LIST of
+        # attribute names (e.g. ["ct"]) means only those attributes are
+        # uncontrolled: compare the rest (use brightness, ignore colour temp).
+        dc = fp.get("dontcare")
+        if dc is True:
             continue
+        dc = dc if isinstance(dc, list) else []
         attrs = state.getattr(lid) or {}
         # A member currently running its own dynamic palette (e.g. a light
         # shared with another room that is playing a dynamic scene there) is
@@ -237,6 +241,7 @@ def _scene_distance(lights):
             continue
         is_on = state.get(lid) == "on"
         want_on = not fp.get("off")
+        skip_on = "on" in dc
         # A light that is off in both the fingerprint and live is not a
         # discriminating feature. Counting it would dilute the average and
         # drown the lights that actually differ (e.g. two 1-lamp night scenes
@@ -250,24 +255,32 @@ def _scene_distance(lights):
         # adds nothing, so don't let it dilute the average; count it only when
         # the on/off state actually mismatches.
         if fp_bri is None:
-            if want_on != is_on:
+            if not skip_on and want_on != is_on:
                 dists.append(1.0)
             continue
         # On/off state is a hard signal and dominates. Crucially, we do NOT
         # read colour from an off light: many Hue lamps keep reporting their
         # last color_temp_kelvin while off, which used to make an off light
         # look almost like an on one (only the brightness differed).
-        if want_on != is_on:
+        if not skip_on and want_on != is_on:
             dists.append(1.0)
             continue
+        if not is_on:
+            continue
         cur_bri = attrs.get("brightness") or 0
+        # Accumulate distance from the controlled attributes only. `contributed`
+        # guards against an all-dontcare lamp diluting the average with a zero.
+        d = 0.0
+        contributed = False
         # Brightness distance on a square-root scale. Linear /255 flattened dim
         # scenes into noise (7 vs 23 -> 0.06); a log scale fixed the dim end but
         # over-compressed the middle, so two mid scenes that differ only in
         # brightness (e.g. 90 vs 143) collapsed to ~0.08 and could not be told
         # apart. sqrt stays sensitive at both ends: 7 vs 23 -> 0.13, 90 vs 143
         # -> 0.15, while high-end noise (240 vs 255) stays small.
-        d = abs(math.sqrt(fp_bri) - math.sqrt(cur_bri)) / 16.0
+        if "bri" not in dc:
+            d += abs(math.sqrt(fp_bri) - math.sqrt(cur_bri)) / 16.0
+            contributed = True
         # Colour weight scales the colour term by how bright the lamp is, so a
         # dim lamp (whose colour is barely visible) is told apart mainly by
         # brightness + on/off. But the two colour axes behave differently when
@@ -294,29 +307,37 @@ def _scene_distance(lights):
             if cand and cand in fp and live.get(cand):
                 axis = cand
                 break
-        if axis is None:
-            # fingerprint had a colour but the live lamp reports none right now
-            if pc is not None:
-                d += math.sqrt(base) * 1.0
-        elif axis == "ct":
-            # /1200: a ~190 K gap (Hell 2702 vs Lesen 2890) is a real, visible
-            # difference; /2000 rated it 0.09 and the two stayed inseparable.
-            # ct jitters when dim, so it keeps the aggressive linear brightness
-            # weight; xy/hs stay stable when dim and get a gentler sqrt weight.
-            # Capped so a stale (laggy) ct can't dominate -- see CT_TERM_CAP.
-            d += min(base * (abs(live["ct"] - fp["ct"]) / 1200.0), CT_TERM_CAP)
-        elif axis == "xy":
-            cw = math.sqrt(base)
-            cur = live["xy"]
-            dx = cur[0] - fp["xy"][0]
-            dy = cur[1] - fp["xy"][1]
-            d += cw * (((dx * dx + dy * dy) ** 0.5) / 0.25)
-        elif axis == "hs":
-            cw = math.sqrt(base)
-            cur = live["hs"]
-            dh = abs(cur[0] - fp["hs"][0])
-            dh = min(dh, 360 - dh)
-            d += cw * (dh / 180.0 + abs(cur[1] - fp["hs"][1]) / 100.0)
+        # Colour is skipped when the scene doesn't control it ("color", or the
+        # specific axis, in dontcare) -- this is what lets Ruhephase be matched
+        # on brightness alone when it leaves the small lamps' ct uncommanded.
+        color_off = ("color" in dc) or (axis is not None and axis in dc)
+        if not color_off:
+            if axis is None:
+                # fingerprint had a colour but the live lamp reports none now
+                if pc is not None:
+                    d += math.sqrt(base) * 1.0
+                    contributed = True
+            elif axis == "ct":
+                # /1200: a ~190 K gap (Hell 2702 vs Lesen 2890) is a real,
+                # visible difference. Capped so a stale/laggy ct can't dominate.
+                d += min(base * (abs(live["ct"] - fp["ct"]) / 1200.0), CT_TERM_CAP)
+                contributed = True
+            elif axis == "xy":
+                cw = math.sqrt(base)
+                cur = live["xy"]
+                dx = cur[0] - fp["xy"][0]
+                dy = cur[1] - fp["xy"][1]
+                d += cw * (((dx * dx + dy * dy) ** 0.5) / 0.25)
+                contributed = True
+            elif axis == "hs":
+                cw = math.sqrt(base)
+                cur = live["hs"]
+                dh = abs(cur[0] - fp["hs"][0])
+                dh = min(dh, 360 - dh)
+                d += cw * (dh / 180.0 + abs(cur[1] - fp["hs"][1]) / 100.0)
+                contributed = True
+        if not contributed:
+            continue
         dists.append(d)
     if not dists:
         return None
@@ -471,7 +492,9 @@ def scene_learn(scene=None, settle=4, **kwargs):
     for lid, rec in entry.items():
         p = prev.get(lid)
         if isinstance(p, dict) and p.get("dontcare"):
-            rec["dontcare"] = True
+            # preserve whatever the contrast calibration decided (True for the
+            # whole lamp, or a list of uncontrolled attributes)
+            rec["dontcare"] = p["dontcare"]
     FP.setdefault(room, {})[scene] = entry
     task.executor(_write_json, FINGERPRINT_FILE, FP)
     log.info(f"Learned: {scene} ({len(entry)} lights)")
