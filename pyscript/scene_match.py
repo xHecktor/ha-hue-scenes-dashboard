@@ -309,13 +309,19 @@ def _best(scenes, current):
         return None, None
     scored.sort()
     best_d = scored[0][0]
+    # Scenes within a hair of the best are treated as a tie. If the currently
+    # tracked scene is among them, keep it (stability -- don't reshuffle on
+    # measurement noise). Otherwise pick the STRICTLY lowest, not the
+    # alphabetically first: two genuinely distinct scenes can land ~0.015 apart
+    # (e.g. Küche ruhephase 0.148 vs entspannen 0.163), and an alphabetical
+    # tie-break would then mislabel the active scene as its neighbour.
     near = []
     for d, sc in scored:
         if d <= best_d + 0.02:
             near.append(sc)
     if current in near:
         return current, best_d
-    return sorted(near)[0], best_d
+    return scored[0][1], best_d
 
 
 def _ar():
