@@ -48,30 +48,13 @@ def _write_json(path, data):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
-def _status(label, running, done=None, total=None, eta=None):
-    # Progress shown on the dashboard admin card. Extra attributes let the card
-    # render a counter and a live estimate (done/total, seconds remaining).
-    attrs = {"label": label}
-    if total is not None:
-        attrs["done"] = done
-        attrs["total"] = total
-        attrs["percent"] = round(100.0 * done / total) if total else 0
-    if eta is not None:
-        attrs["eta_seconds"] = int(eta)
-    # The STATE VALUE itself carries the progress ("3/11"), not just the label.
-    if running and total:
-        value = f"{done}/{total}"
-    else:
-        value = "running" if running else "idle"
-    state.set("pyscript.calibration", value, **attrs)
-    # Also mirror the full text into an input_text: a pyscript.* entity's
-    # updates do not reliably refresh a Lovelace card mid-run, an input_text
-    # always does. This is what the calibration card actually displays.
-    try:
-        input_text.set_value(entity_id="input_text.calibrate_progress",
-                             value=label[:255])
-    except Exception:
-        pass
+def _status(label, running):
+    # Progress shown on the dashboard admin card. Keep it minimal: the state
+    # stays "running"/"idle" and only the `label` attribute changes -- this is
+    # the form that reliably re-renders the card live. The counter and ETA are
+    # baked into the label text itself. (Changing the state value or adding
+    # extra attributes each scene stopped the card from refreshing mid-run.)
+    state.set("pyscript.calibration", "running" if running else "idle", label=label)
 
 
 def _fmt_eta(sec):
@@ -283,7 +266,7 @@ fields:
     total = len(todo)
     count = 0
     t0 = time.time()
-    _status(f"Kalibriere {room or 'alle Räume'} … 0/{total}", True, 0, total, None)
+    _status(f"Kalibriere {room or 'alle Räume'} … 0/{total}", True)
 
     for eid, rname, attrs, group in todo:
         try:
@@ -323,13 +306,12 @@ fields:
             elapsed = time.time() - t0
             remaining = (elapsed / count) * (total - count)
             _status(f"{rname}: {attrs.get('name') or eid} — {count}/{total} · "
-                    f"noch ~{_fmt_eta(remaining)}", True, count, total, remaining)
+                    f"noch ~{_fmt_eta(remaining)}", True)
             log.warning(f"FINGERPRINT: {eid} ({len(entry)} lights{dctxt}) [{count}/{total}]")
         except Exception as e:
             log.error(f"FINGERPRINT: error at {eid}: {e}")
 
     task.executor(_write_json, FINGERPRINT_FILE, db)
     took = _fmt_eta(time.time() - t0)
-    _status(f"Fertig – {count}/{total} Szenen in {took} ({room or 'alle'})",
-            False, count, total, 0)
+    _status(f"Fertig – {count}/{total} Szenen in {took} ({room or 'alle'})", False)
     log.warning(f"FINGERPRINT: done, {count} scenes stored")

@@ -17,10 +17,11 @@ entities:
     name: Einschwingzeit
   - entity: input_boolean.calibrate_contrast
     name: Kontrast-Modus (gründlich)
-  # Live progress line, written to an input_text (renders reliably mid-run):
-  # "Küche: Ruhephase — 3/11 · noch ~0:32 min".
-  - entity: input_text.calibrate_progress
-    name: Fortschritt
+  # Live status line: "Küche: Ruhephase — 3/11 · noch ~0:32 min".
+  - type: attribute
+    entity: pyscript.calibration
+    attribute: label
+    name: Status
     icon: mdi:fingerprint
 footer:
   type: buttons
