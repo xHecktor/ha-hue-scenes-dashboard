@@ -1,2 +1,6 @@
 scene_fingerprints.json
 .DS_Store
+
+# Python bytecode
+__pycache__/
+*.pyc
