@@ -26,6 +26,8 @@ Requires pyscript with `allow_all_imports: true`.
 import json
 from homeassistant.util import slugify
 
+VERSION = "d2"  # printed in the log so the running version is visible
+
 FINGERPRINT_FILE = "/config/scene_fingerprints.json"
 TRACKER = "pyscript.scene_tracker"
 EXCLUDE_SUFFIXES = ("_naturliches_licht",)
@@ -127,7 +129,7 @@ fields:
     fails = []
     slowest = 0.0
     slowest_what = "-"
-    log.warning(f"DIAGNOSE: start (room={room or 'all'}, settle={settle})")
+    log.warning(f"DIAGNOSE {VERSION}: start (room={room or 'all'}, settle={settle})")
 
     for rname, scenes in db.items():
         if room and slugify(rname) != slugify(room):
@@ -137,19 +139,34 @@ fields:
             log.warning(f"DIAGNOSE {rname}: skipped (no Hue group)")
             continue
         members = (state.getattr(group) or {}).get("entity_id") or []
-        names = [s for s in scenes if not _excluded(s)]
+        # NB: build lists with plain loops, not comprehensions calling pyscript
+        # functions, and pick extremes without max/min+lambda -- pyscript can't
+        # pass its (async) functions as a `key=` to builtins.
+        names = []
+        for s in scenes:
+            if not _excluded(s):
+                names.append(s)
         if len(names) < 2:
             continue
 
         # Contrasting sources: the coolest (highest mean ct) and the dimmest
-        # (lowest mean brightness). Approaching a warm/bright target from these
-        # exercises the worst ct- and brightness-lag transitions.
-        stats = {s: _mean_bri_ct(scenes[s]) for s in names}
-        coolest = max(names, key=lambda s: stats[s][1])
-        dimmest = min(names, key=lambda s: stats[s][0])
+        # (lowest mean brightness). Approaching a target from these exercises
+        # the worst ct- and brightness-lag transitions.
+        coolest = None
+        dimmest = None
+        best_ct = -1.0
+        low_bri = 1e9
+        for s in names:
+            mb, mc = _mean_bri_ct(scenes[s])
+            if mc > best_ct:
+                best_ct = mc
+                coolest = s
+            if mb < low_bri:
+                low_bri = mb
+                dimmest = s
         sources = []
         for s in (coolest, dimmest):
-            if s not in sources:
+            if s and s not in sources:
                 sources.append(s)
         log.warning(f"DIAGNOSE {rname}: {len(names)} scenes, "
                     f"sources={[s.split('.')[-1] for s in sources]}")
