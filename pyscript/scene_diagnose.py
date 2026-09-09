@@ -26,7 +26,11 @@ Requires pyscript with `allow_all_imports: true`.
 import json
 from homeassistant.util import slugify
 
-VERSION = "d5"  # printed in the log so the running version is visible
+VERSION = "d6"  # printed in the log so the running version is visible
+
+# Strong reference to the background task so it isn't garbage-collected (and
+# cancelled) the moment the service function that created it returns.
+_DIAG_TASK = None
 
 FINGERPRINT_FILE = "/config/scene_fingerprints.json"
 REPORT_FILE = "/config/scene_diagnose_report.txt"
@@ -156,13 +160,17 @@ fields:
     # Run in the background so the Actions UI call returns at once. A full
     # matrix over many scenes takes minutes and would otherwise hit the
     # service-call timeout ("could not be executed") and look like it aborted.
-    task.create(_diagnose_run, room, settle, mode)
-    log.warning(f"DIAGNOSE {VERSION}: running in background "
+    # Keep a strong reference so the task isn't dropped when we return here.
+    global _DIAG_TASK
+    _DIAG_TASK = task.create(_diagnose_run, room, settle, mode)
+    log.warning(f"DIAGNOSE {VERSION}: spawned background run "
                 f"(room={room or 'all'}, mode={mode}) -> report to {REPORT_FILE}")
 
 
 def _diagnose_run(room=None, settle=4, mode="full"):
     task.unique("scene_diagnose")
+    log.warning(f"DIAGNOSE {VERSION}: worker started (room={room or 'all'}, "
+                f"settle={settle}, mode={mode})")
     db = task.executor(_read_json, FINGERPRINT_FILE)
     lights_all = state.names("light")
     n_ok = 0
@@ -173,8 +181,7 @@ def _diagnose_run(room=None, settle=4, mode="full"):
     # Every line is also collected here and written to REPORT_FILE at the end,
     # because the HA log UI collapses repeated entries and hides most runs.
     report = [f"scene_diagnose {VERSION}  {_now()}",
-              f"room={room or 'all'}  settle={settle}s", ""]
-    log.warning(f"DIAGNOSE {VERSION}: start (room={room or 'all'}, settle={settle})")
+              f"room={room or 'all'}  settle={settle}s  mode={mode}", ""]
 
     for rname, scenes in db.items():
         if room and slugify(rname) != slugify(room):
