@@ -67,9 +67,8 @@ marks scenes that support dynamic mode.
   **decluttering-card**.
 - No manual light groups needed: the code uses the **native Hue group light**
   the integration already creates for every room and zone (`is_hue_group: true`,
-  `friendly_name` = the room name, `entity_id` = the members). A
-  `light.dimmer_<slug>` helper group is only a fallback for non-Hue setups
-  (see [Adapting to your setup](#adapting-to-your-setup)).
+  `friendly_name` = the room name, `entity_id` = the members). Nothing to name
+  or create.
 
 ## Install
 
@@ -141,13 +140,10 @@ List the exact room names with:
 
 ## Adapting to your setup
 
-- **Room light group** — by default the code finds a room's lights on the
-  native Hue group light (matched by `is_hue_group` + `friendly_name`), so
-  there is nothing to name or create. Only if you are **not** on the Hue
-  integration does it fall back to a helper group `GROUP_PREFIX + slugify(room)`
-  (default `light.dimmer_`, umlaut-tolerant: `Küche` → `light.dimmer_kuche` or
-  `light.dimmer_kueche`). Change `GROUP_PREFIX` in both pyscript files to
-  rename that fallback.
+- **Room light group** — the code finds a room's lights on the native Hue
+  group light (matched by `is_hue_group` + `friendly_name`), so there is
+  nothing to name or create. This bundle targets the Philips Hue integration;
+  a room without a native Hue group light is simply skipped.
 - **Standard scene names** — block 1 recognises the standard scenes by name
   (`Hell`, `Kühl hell`, …). Adjust the `NAMED` list in the template for your
   language.

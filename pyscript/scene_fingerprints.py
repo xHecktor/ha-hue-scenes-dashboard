@@ -15,34 +15,20 @@ from homeassistant.util import slugify
 
 FINGERPRINT_FILE = "/config/scene_fingerprints.json"
 
-# Fallback light-group naming for non-Hue setups: GROUP_PREFIX + slugify(room).
-GROUP_PREFIX = "light.dimmer_"
-
-
 def _group_for(room, lights_all):
-    """Resolve a room's group light and its member list. Keep in sync with
-    scene_match.py.
+    """Resolve a room's (or zone's) native Hue group light, or None. Keep in
+    sync with scene_match.py.
 
-    Prefer the native Hue group light (`is_hue_group: true`, `friendly_name`
-    = the room name) the integration already provides -- no manual group, no
-    naming convention, umlaut-proof, and `is_hue_group` separates the group
-    from a same-named single bulb. Fall back to GROUP_PREFIX + slug (with
-    umlaut tolerance) for non-Hue setups.
+    The native Hue group light (`is_hue_group: true`, `friendly_name` = the
+    room name) the integration already provides -- no manual group, no naming
+    convention, and `is_hue_group` separates the group from a same-named
+    single bulb.
     """
     for lid in lights_all:
         a = state.getattr(lid) or {}
         if a.get("is_hue_group") and a.get("friendly_name") == room:
             return lid
-    primary = GROUP_PREFIX + slugify(room)
-    if primary in lights_all:
-        return primary
-    de = room.lower()
-    for a, b in (("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss")):
-        de = de.replace(a, b)
-    alt = GROUP_PREFIX + slugify(de)
-    if alt in lights_all:
-        return alt
-    return primary
+    return None
 
 
 @pyscript_compile

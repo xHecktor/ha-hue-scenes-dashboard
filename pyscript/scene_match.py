@@ -17,47 +17,28 @@ FINGERPRINT_FILE = "/config/scene_fingerprints.json"
 DYNAMIC_SENSOR = "sensor.dynamische_szenen"
 TRACKER = "pyscript.scene_tracker"
 
-# Fallback light-group naming for non-Hue setups: GROUP_PREFIX + slugify(room).
-GROUP_PREFIX = "light.dimmer_"
-
 # room name -> resolved group entity (cheap cache; invalidated if it vanishes)
 GROUP_CACHE = {}
 
 
 def _group_for(room, lights_all):
-    """Resolve a room's group light and its member list.
+    """Resolve a room's (or zone's) native Hue group light, or None.
 
-    The Philips Hue integration already exposes one group light per room and
-    zone (`is_hue_group: true`, `friendly_name` = the room name, `entity_id`
-    listing the members) -- so we just match on that. No manual helper group,
-    no `light.dimmer_` naming convention and no umlaut slug matching needed;
-    `is_hue_group` also separates the group (e.g. `light.kuche_2`) from a
-    same-named single bulb (`light.kuche`).
-
-    Falls back to the GROUP_PREFIX + slug convention (with umlaut tolerance)
-    for non-Hue setups.
+    The Philips Hue integration exposes one group light per room and zone
+    (`is_hue_group: true`, `friendly_name` = the room name, `entity_id`
+    listing the members), so we just match on that -- no manual helper group
+    and no naming convention. `is_hue_group` also separates the group (e.g.
+    `light.kuche_2`) from a same-named single bulb (`light.kuche`).
     """
     cached = GROUP_CACHE.get(room)
     if cached and cached in lights_all:
         return cached
-    found = None
     for lid in lights_all:
         a = state.getattr(lid) or {}
         if a.get("is_hue_group") and a.get("friendly_name") == room:
-            found = lid
-            break
-    if not found:
-        primary = GROUP_PREFIX + slugify(room)
-        if primary in lights_all:
-            found = primary
-        else:
-            de = room.lower()
-            for a, b in (("ä", "ae"), ("ö", "oe"), ("ü", "ue"), ("ß", "ss")):
-                de = de.replace(a, b)
-            alt = GROUP_PREFIX + slugify(de)
-            found = alt if alt in lights_all else primary
-    GROUP_CACHE[room] = found
-    return found
+            GROUP_CACHE[room] = lid
+            return lid
+    return None
 
 ACCEPT = 0.35        # max distance to accept a match
 CLEAR = 0.60         # above this: clearly nothing -> mark room unknown
@@ -544,14 +525,13 @@ def _on_dyn_change(**kwargs):
 @event_trigger("state_changed", "entity_id.startswith('light.')")
 def _on_light_change(**kwargs):
     # Any light changed (a scene was set, dimmed, turned off, ...). We watch
-    # ALL lights, not just `light.dimmer_`: with the native Hue integration a
-    # room's group and members are named for the room (light.kuche_2,
-    # light.kuche, light.badezimmer, ...) and none carry the dimmer_ prefix, so
-    # a prefix filter would never fire and event-driven detection would be dead
-    # (leaving only the slow background loop -- the cause of a room staying
-    # frozen on its last scene). Re-evaluate right after the Hue fade settles;
-    # task.unique coalesces a whole scene's worth of per-lamp change events into
-    # a single run, 1.5 s after the last change.
+    # ALL lights on purpose: with the native Hue integration a room's group and
+    # members are named for the room (light.kuche_2, light.kuche,
+    # light.badezimmer, ...) with no shared prefix to filter on, so watching a
+    # subset would miss changes and leave detection to the slow background loop
+    # (a room frozen on its last scene). Re-evaluate right after the Hue fade
+    # settles; task.unique coalesces a whole scene's worth of per-lamp change
+    # events into a single run, 1.5 s after the last change.
     task.unique("scene_light_settle")
     task.sleep(SETTLE_AFTER_CHANGE)
     scene_match_all()
