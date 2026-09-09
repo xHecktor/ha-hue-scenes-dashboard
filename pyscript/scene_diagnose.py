@@ -26,7 +26,7 @@ Requires pyscript with `allow_all_imports: true`.
 import json
 from homeassistant.util import slugify
 
-VERSION = "d4"  # printed in the log so the running version is visible
+VERSION = "d5"  # printed in the log so the running version is visible
 
 FINGERPRINT_FILE = "/config/scene_fingerprints.json"
 REPORT_FILE = "/config/scene_diagnose_report.txt"
@@ -153,6 +153,15 @@ fields:
       only coolest + dimmest sources"
     example: full
 """
+    # Run in the background so the Actions UI call returns at once. A full
+    # matrix over many scenes takes minutes and would otherwise hit the
+    # service-call timeout ("could not be executed") and look like it aborted.
+    task.create(_diagnose_run, room, settle, mode)
+    log.warning(f"DIAGNOSE {VERSION}: running in background "
+                f"(room={room or 'all'}, mode={mode}) -> report to {REPORT_FILE}")
+
+
+def _diagnose_run(room=None, settle=4, mode="full"):
     task.unique("scene_diagnose")
     db = task.executor(_read_json, FINGERPRINT_FILE)
     lights_all = state.names("light")
