@@ -278,7 +278,8 @@ def _scene_distance(lights):
     return (1.0 - BLEND_WEIGHT) * mean + BLEND_WEIGHT * max(dists)
 
 
-def _best(scenes, current):
+def _ranked(scenes):
+    # Every non-excluded scene scored against the live lights, closest first.
     scored = []
     for sc, lights in scenes.items():
         if _excluded(sc):
@@ -286,23 +287,26 @@ def _best(scenes, current):
         d = _scene_distance(lights)
         if d is not None:
             scored.append((d, sc))
-    if not scored:
-        return None, None
     scored.sort()
-    best_d = scored[0][0]
+    return scored
+
+
+def _best(scenes, current, ranked=None):
+    if ranked is None:
+        ranked = _ranked(scenes)
+    if not ranked:
+        return None, None
+    best_d = ranked[0][0]
     # Scenes within a hair of the best are treated as a tie. If the currently
     # tracked scene is among them, keep it (stability -- don't reshuffle on
     # measurement noise). Otherwise pick the STRICTLY lowest, not the
     # alphabetically first: two genuinely distinct scenes can land ~0.015 apart
     # (e.g. Küche ruhephase 0.148 vs entspannen 0.163), and an alphabetical
     # tie-break would then mislabel the active scene as its neighbour.
-    near = []
-    for d, sc in scored:
-        if d <= best_d + 0.02:
-            near.append(sc)
+    near = [sc for d, sc in ranked if d <= best_d + 0.02]
     if current in near:
         return current, best_d
-    return scored[0][1], best_d
+    return ranked[0][1], best_d
 
 
 def _ar():
@@ -338,7 +342,16 @@ def _update_room(room, scenes, ar, lights_all, result):
     # freshly tapped -> locked, keep
     if current and time.time() < LOCK.get(room, 0):
         return f"{room}:{current.split('.')[-1]}:lock"
-    best, d = _best(scenes, current)
+    ranked = _ranked(scenes)
+    best, d = _best(scenes, current, ranked)
+    # runner-up, for the log: seeing the second-best and its distance is what
+    # tells "clean win" from "two scenes almost tied" at a glance.
+    r2 = None
+    for cand, sc in ranked:
+        if sc != best:
+            r2 = f" | 2nd {sc.split('.')[-1]}={round(cand, 2)}"
+            break
+    r2 = r2 or ""
     # Hold the current scene only while it stays within a small margin of the
     # best candidate. This damps flip-flop between near-identical scenes but,
     # unlike the old absolute threshold, still lets the room switch to a
@@ -346,14 +359,17 @@ def _update_room(room, scenes, ar, lights_all, result):
     if current and current in scenes and not _excluded(current):
         dc = _scene_distance(scenes[current])
         if dc is not None and dc <= CLEAR and (d is None or dc <= d + KEEP_MARGIN):
-            return f"{room}:{current.split('.')[-1]}:keep({round(dc, 2)})"
+            return f"{room}:{current.split('.')[-1]}=KEEP({round(dc, 2)}){r2}"
     short = best.split(".")[-1] if best else "-"
+    act = "hold"
     if best is not None and d is not None:
         if d <= ACCEPT:
             result[room] = best
+            act = "SET"
         elif d >= CLEAR:
             result.pop(room, None)
-    return f"{room}:{short}:{round(d, 2) if d is not None else '-'}"
+            act = "CLEAR"
+    return f"{room}:{short}={round(d, 2) if d is not None else '-'} {act}{r2}"
 
 
 @service
@@ -492,6 +508,68 @@ fields:
         val = "-" if d == 999.0 else round(d, 3)
         lines.append(f"  {val}  {sc.split('.')[-1]}{tag}")
     log.warning("Matcher " + "\n".join(lines))
+
+
+@service
+def scene_trace(room=None, seconds=25, scene=None, **kwargs):
+    """yaml
+name: Trace a room live
+description: Log a room's live per-lamp state and the closest scene matches
+  once a second for N seconds. Start it, then switch the scene in the Hue app
+  to see exactly what the matcher sees, frame by frame -- transient during the
+  fade and where it settles. Pass `scene` to also print that scene's stored
+  fingerprint next to the live values (to spot a stale calibration).
+fields:
+  room:
+    description: Room name (group_name)
+    example: Flur
+  seconds:
+    description: How long to trace
+    example: 25
+  scene:
+    description: Optional scene entity_id to compare live values against
+    example: scene.flur_ruhephase
+"""
+    if not room:
+        return
+    if not FP:
+        _load()
+    key = None
+    for k in FP.keys():
+        if slugify(k) == slugify(room):
+            key = k
+            break
+    if key is None:
+        log.warning(f"TRACE: room '{room}' not in DB")
+        return
+    group = _group_for(key, state.names("light"))
+    members = (state.getattr(group) or {}).get("entity_id") or [] if group else []
+    fp = FP[key].get(scene) if scene else None
+    if scene and fp:
+        stored = []
+        for lid, r in fp.items():
+            if r.get("off"):
+                stored.append(f"{lid.split('.')[-1]}=off")
+            else:
+                stored.append(f"{lid.split('.')[-1]}=b{r.get('bri')}/ct{r.get('ct')}")
+        log.warning(f"TRACE {key} stored[{scene.split('.')[-1]}]: {' '.join(stored)}")
+    log.warning(f"TRACE {key}: {int(seconds)}s  group={group}={state.get(group)}")
+    i = 0
+    while i < int(seconds):
+        parts = []
+        for lid in members:
+            a = state.getattr(lid) or {}
+            if state.get(lid) != "on":
+                parts.append(f"{lid.split('.')[-1]}=off")
+                continue
+            ct = a.get("color_temp_kelvin")
+            parts.append(f"{lid.split('.')[-1]}=b{a.get('brightness')}/ct{ct}")
+        ranked = _ranked(FP[key])
+        top = "  ".join(f"{sc.split('.')[-1]}={round(dd, 2)}" for dd, sc in ranked[:3])
+        log.warning(f"TRACE {key} t={i:2d}s | {' '.join(parts)} | {top}")
+        task.sleep(1.0)
+        i += 1
+    log.warning(f"TRACE {key}: done")
 
 
 @service
