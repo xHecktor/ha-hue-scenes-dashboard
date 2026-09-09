@@ -140,16 +140,31 @@ def _snap(members):
     return s
 
 
-def _wait_settled(members, settle, max_wait=15.0):
+def _force_refresh(members):
+    # Some Hue lamps report their colour temperature with a long lag after a
+    # scene change (brightness updates at once, ct stays stuck on the previous
+    # scene's value for many seconds -- light.kuche does this). Ask the
+    # integration to re-fetch the real state so we don't learn a stale ct.
+    try:
+        homeassistant.update_entity(entity_id=members)
+    except Exception as e:
+        log.warning(f"Matcher: update_entity failed: {e}")
+
+
+def _wait_settled(members, settle, max_wait=45.0):
     # Wait at least `settle` seconds and until two 1s-apart reads are identical
     # (brightness AND color_mode AND colour), so a lamp that keeps drifting its
     # colour -- or is still flipping colour_mode -- after a scene change is
-    # recorded only once it has fully stopped moving.
+    # recorded only once it has fully stopped moving. The cap is generous
+    # because a laggy lamp's ct can take 20-30 s to catch up; fast lamps still
+    # return in a few seconds. A forced refresh nudges a stuck reported value.
     prev = None
     waited = 0.0
     while waited < max_wait:
         task.sleep(1.0)
         waited += 1.0
+        if int(waited) % 3 == 0:
+            _force_refresh(members)
         snap = _snap(members)
         if snap == prev and waited >= float(settle):
             return
