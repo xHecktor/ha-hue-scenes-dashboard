@@ -114,11 +114,28 @@ data:
 ```
 
 Each scene is run **twice from opposite starting states** (warm+bright vs
-cool+dim). Any lamp that ends up different between the two runs is one the
-scene doesn't control — it is flagged `dontcare` in the JSON and ignored when
-matching. Costs ~2× the flashing, so use it only for a room that stays
-ambiguous. The flag survives learn-on-tap (a normal tap can't re-verify
-control, so it carries the flag forward).
+cool+dim) and the two results are compared **per attribute**. Any attribute
+that ends up different is one the scene doesn't control, and it is stored in
+the fingerprint as `dontcare` (a list, e.g. `["ct"]`) so the matcher ignores
+*only that attribute* for that lamp — e.g. a scene that sets a lamp's
+brightness but leaves its colour temperature free is still matched on
+brightness. A lamp whose on/off itself is free becomes a full wildcard
+(`dontcare: true`). The flag survives learn-on-tap.
+
+Priming is done through the group light (one command) and every Hue command
+is **rate-limited**, so whole-home runs can calibrate several rooms at once
+without flooding the bridge:
+
+```yaml
+action: pyscript.scene_fingerprint_calibrate
+data:
+  contrast: true
+  parallel: 3        # rooms in parallel (whole-home); 1 = sequential
+```
+
+A readable log is written to **`/config/scene_calibrate_log.txt`**, flushed
+line by line (crash-safe, shows which attributes were marked don't-care per
+lamp). The whole run is a background task, so the action returns immediately.
 
 For a dashboard-friendly version, add `lovelace/calibration_card.yaml` — a
 room picker (or "Alle Räume") with a **Kalibrieren** button and a live status
