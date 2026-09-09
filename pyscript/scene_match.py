@@ -45,7 +45,8 @@ CLEAR = 0.60         # above this: clearly nothing -> mark room unknown
 KEEP_MARGIN = 0.10   # keep current scene only while within this of the best
 LOCK_SECONDS = 30    # after a user tap, don't override the room for this long
 LOOP_SECONDS = 15    # background re-evaluation interval (backstop; events drive speed)
-SETTLE_AFTER_CHANGE = 1.5  # wait for the Hue fade to finish before matching
+SETTLE_AFTER_CHANGE = 1.5  # min wait after the last change before matching
+SETTLE_MAX = 8.0           # cap on the extra wait-until-lights-hold-still
 # Scene distance is the MEAN of the per-lamp distances (robust: no single lamp
 # dominates) blended with the single largest per-lamp distance:
 #   distance = (1 - w) * mean + w * max
@@ -169,6 +170,21 @@ def _excluded(sc):
         if sc.endswith(suf):
             return True
     return False
+
+
+def _light_snapshot():
+    # Coarse state of every light (on/off, brightness, quantised ct), used to
+    # detect when a scene change has stopped transitioning. ct is bucketed so a
+    # 1-2 K jitter doesn't read as "still moving".
+    s = []
+    for lid in state.names("light"):
+        if state.get(lid) != "on":
+            s.append((lid, 0, -1))
+            continue
+        a = state.getattr(lid) or {}
+        ct = a.get("color_temp_kelvin")
+        s.append((lid, a.get("brightness") or 0, (ct // 25 if ct else -1)))
+    return tuple(s)
 
 
 def _scene_distance(lights):
@@ -612,6 +628,22 @@ def _on_light_change(**kwargs):
     # events into a single run, 1.5 s after the last change.
     task.unique("scene_light_settle")
     task.sleep(SETTLE_AFTER_CHANGE)
+    # Then wait until the lights actually HOLD STILL before matching. A Hue lamp
+    # snaps its brightness fast but can crawl its colour temperature for several
+    # seconds after a scene change; matching mid-drift makes a scene look like a
+    # different one (dim + not-yet-warm reads as a night scene). The drift is
+    # longest when coming from a far-away colour -- which is exactly why the
+    # mismatch is source-dependent. Poll until two 1 s reads are identical (or
+    # the cap), so we always match the settled state, whatever we came from.
+    prev = None
+    waited = 0.0
+    while waited < SETTLE_MAX:
+        snap = _light_snapshot()
+        if snap == prev:
+            break
+        prev = snap
+        task.sleep(1.0)
+        waited += 1.0
     scene_match_all()
 
 

@@ -11,6 +11,7 @@ Requires pyscript with `allow_all_imports: true`.
 """
 
 import json
+import time
 from homeassistant.util import slugify
 
 FINGERPRINT_FILE = "/config/scene_fingerprints.json"
@@ -47,9 +48,23 @@ def _write_json(path, data):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
-def _status(label, running):
-    # Progress shown on the dashboard admin card.
-    state.set("pyscript.calibration", "running" if running else "idle", label=label)
+def _status(label, running, done=None, total=None, eta=None):
+    # Progress shown on the dashboard admin card. Extra attributes let the card
+    # render a counter and a live estimate (done/total, seconds remaining).
+    attrs = {"label": label}
+    if total is not None:
+        attrs["done"] = done
+        attrs["total"] = total
+        attrs["percent"] = round(100.0 * done / total) if total else 0
+    if eta is not None:
+        attrs["eta_seconds"] = int(eta)
+    state.set("pyscript.calibration", "running" if running else "idle", **attrs)
+
+
+def _fmt_eta(sec):
+    sec = int(max(0, sec))
+    m, s = divmod(sec, 60)
+    return f"{m}:{s:02d} min" if m else f"{s} s"
 
 
 def _fp_light(ml, is_on):
@@ -216,23 +231,33 @@ fields:
         db = {}
 
     lights_all = state.names("light")
-    count = 0
 
+    # Pre-collect the scenes we will calibrate so the progress display can show
+    # "x / total" and a live time estimate. Resolving the group here also drops
+    # scenes with no group up front, keeping the total honest.
+    todo = []
     for eid in state.names("scene"):
-        try:
-            attrs = state.getattr(eid) or {}
-            if attrs.get("group_type") not in ("room", "zone"):
-                continue
-            rname = attrs.get("group_name")
-            if not rname:
-                continue
-            if room and slugify(rname) != slugify(room):
-                continue
-            group = _group_for(rname, lights_all)
-            if group not in lights_all:
-                log.warning(f"FINGERPRINT: {eid} skipped (no {group})")
-                continue
+        attrs = state.getattr(eid) or {}
+        if attrs.get("group_type") not in ("room", "zone"):
+            continue
+        rname = attrs.get("group_name")
+        if not rname:
+            continue
+        if room and slugify(rname) != slugify(room):
+            continue
+        group = _group_for(rname, lights_all)
+        if group not in lights_all:
+            log.warning(f"FINGERPRINT: {eid} skipped (no group)")
+            continue
+        todo.append((eid, rname, attrs, group))
 
+    total = len(todo)
+    count = 0
+    t0 = time.time()
+    _status(f"Kalibriere {room or 'alle Räume'} … 0/{total}", True, 0, total, None)
+
+    for eid, rname, attrs, group in todo:
+        try:
             members = (state.getattr(group) or {}).get("entity_id") or []
 
             if contrast:
@@ -264,11 +289,18 @@ fields:
             count += 1
             dc = sum(1 for r in entry.values() if r.get("dontcare"))
             dctxt = f", {dc} don't-care" if dc else ""
-            _status(f"{rname}: {attrs.get('name') or eid} ({count})", True)
-            log.warning(f"FINGERPRINT: {eid} ({len(entry)} lights{dctxt})")
+            # Live estimate from the average time per scene so far -- self-
+            # correcting, so contrast mode's slower scenes are reflected too.
+            elapsed = time.time() - t0
+            remaining = (elapsed / count) * (total - count)
+            _status(f"{rname}: {attrs.get('name') or eid} — {count}/{total} · "
+                    f"noch ~{_fmt_eta(remaining)}", True, count, total, remaining)
+            log.warning(f"FINGERPRINT: {eid} ({len(entry)} lights{dctxt}) [{count}/{total}]")
         except Exception as e:
             log.error(f"FINGERPRINT: error at {eid}: {e}")
 
     task.executor(_write_json, FINGERPRINT_FILE, db)
-    _status(f"Fertig – {count} Szenen ({room or 'alle'})", False)
+    took = _fmt_eta(time.time() - t0)
+    _status(f"Fertig – {count}/{total} Szenen in {took} ({room or 'alle'})",
+            False, count, total, 0)
     log.warning(f"FINGERPRINT: done, {count} scenes stored")
