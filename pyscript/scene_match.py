@@ -46,7 +46,7 @@ KEEP_MARGIN = 0.10   # keep current scene only while within this of the best
 LOCK_SECONDS = 30    # after a user tap, don't override the room for this long
 LOOP_SECONDS = 15    # background re-evaluation interval (backstop; events drive speed)
 SETTLE_AFTER_CHANGE = 1.5  # min wait after the last change before matching
-SETTLE_MAX = 8.0           # cap on the extra wait-until-lights-hold-still
+SETTLE_MAX = 14.0          # cap on the extra wait-until-lights-hold-still
 # Scene distance is the MEAN of the per-lamp distances (robust: no single lamp
 # dominates) blended with the single largest per-lamp distance:
 #   distance = (1 - w) * mean + w * max
@@ -653,6 +653,14 @@ def _on_light_change(**kwargs):
     prev = None
     waited = 0.0
     while waited < SETTLE_MAX:
+        # Nudge laggy lamps to report their real state. Some Hue lamps keep
+        # reporting a stale colour temperature for many seconds after a scene
+        # change; the calibration unsticks this with a forced refresh, and the
+        # live matcher MUST do the same -- otherwise it settles on a
+        # mid-transition read (dim + still-cool = a night scene) and stays there
+        # (this was ruhephase-from-kühl-hell showing as nachtlicht in the Flur).
+        on_now = [lid for lid in state.names("light") if state.get(lid) == "on"]
+        _force_refresh(on_now)
         snap = _light_snapshot()
         if snap == prev:
             break
