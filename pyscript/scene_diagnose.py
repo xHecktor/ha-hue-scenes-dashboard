@@ -26,7 +26,7 @@ Requires pyscript with `allow_all_imports: true`.
 import json
 from homeassistant.util import slugify
 
-VERSION = "d3"  # printed in the log so the running version is visible
+VERSION = "d4"  # printed in the log so the running version is visible
 
 FINGERPRINT_FILE = "/config/scene_fingerprints.json"
 REPORT_FILE = "/config/scene_diagnose_report.txt"
@@ -92,6 +92,18 @@ def _mean_bri_ct(entry):
             sum(cts) / len(cts) if cts else 0)
 
 
+def _live_str(members):
+    # Live per-lamp brightness/ct, for showing WHY a transition was misread.
+    parts = []
+    for lid in members:
+        a = state.getattr(lid) or {}
+        if state.get(lid) != "on":
+            parts.append(f"{lid.split('.')[-1]}=off")
+        else:
+            parts.append(f"{lid.split('.')[-1]}=b{a.get('brightness')}/ct{a.get('color_temp_kelvin')}")
+    return " ".join(parts)
+
+
 def _wait_stable_match(room, members, min_wait=3.0, max_wait=45.0, need=3):
     # Self-adjusting settle: poll the matcher's verdict once a second (nudging
     # laggy lamps with a forced refresh) until it holds steady for `need` reads,
@@ -118,14 +130,17 @@ def _wait_stable_match(room, members, min_wait=3.0, max_wait=45.0, need=3):
 
 
 @service
-def scene_diagnose(room=None, settle=4, **kwargs):
+def scene_diagnose(room=None, settle=4, mode="full", **kwargs):
     """yaml
 name: Diagnose scene detection (multi-path)
-description: Drive every static scene from several different source scenes and
-  check the live matcher identifies each one, waiting a self-adjusting time
-  until the verdict is stable. Logs source -> target, detected scene, seconds
-  to stabilise and PASS/FAIL for every run, plus a summary. The lights flash
-  through the scenes. Read-only -- it never changes the fingerprint database.
+description: Drive every static scene from other scenes and check the live
+  matcher identifies each one, waiting a self-adjusting time until the verdict
+  is stable. In 'full' mode every scene is approached from EVERY other scene
+  (catches neighbour confusions like entspannen->ruhephase); 'quick' uses just
+  the coolest and dimmest sources. Logs source -> target, seconds to stabilise
+  and PASS/FAIL for every run (with the live lamp values on a FAIL), plus a
+  summary, and writes the full report to /config/scene_diagnose_report.txt.
+  The lights flash through the scenes. Read-only -- never changes the database.
 fields:
   room:
     description: Only this room (group_name). Empty = whole home.
@@ -133,6 +148,10 @@ fields:
   settle:
     description: Seconds to hold each SOURCE scene before switching to the target
     example: 4
+  mode:
+    description: "full = every scene from every other (thorough, slow); quick =
+      only coolest + dimmest sources"
+    example: full
 """
     task.unique("scene_diagnose")
     db = task.executor(_read_json, FINGERPRINT_FILE)
@@ -166,30 +185,32 @@ fields:
         if len(names) < 2:
             continue
 
-        # Contrasting sources: the coolest (highest mean ct) and the dimmest
-        # (lowest mean brightness). Approaching a target from these exercises
-        # the worst ct- and brightness-lag transitions.
-        coolest = None
-        dimmest = None
-        best_ct = -1.0
-        low_bri = 1e9
-        for s in names:
-            mb, mc = _mean_bri_ct(scenes[s])
-            if mc > best_ct:
-                best_ct = mc
-                coolest = s
-            if mb < low_bri:
-                low_bri = mb
-                dimmest = s
-        sources = []
-        for s in (coolest, dimmest):
-            if s and s not in sources:
-                sources.append(s)
-        src_short = []
-        for s in sources:
-            src_short.append(s.split(".")[-1])
-        report.append(f"[{rname}]  {len(names)} scenes  sources={src_short}")
-        log.warning(f"DIAGNOSE {rname}: {len(names)} scenes, sources={src_short}")
+        # Sources to approach each target from. 'full' = every other scene, so
+        # neighbour confusions (entspannen->ruhephase) are actually tested.
+        # 'quick' = just the coolest (highest mean ct) and dimmest (lowest mean
+        # brightness), the worst ct/brightness-lag transitions.
+        if mode == "quick":
+            coolest = None
+            dimmest = None
+            best_ct = -1.0
+            low_bri = 1e9
+            for s in names:
+                mb, mc = _mean_bri_ct(scenes[s])
+                if mc > best_ct:
+                    best_ct = mc
+                    coolest = s
+                if mb < low_bri:
+                    low_bri = mb
+                    dimmest = s
+            sources = []
+            for s in (coolest, dimmest):
+                if s and s not in sources:
+                    sources.append(s)
+        else:
+            sources = names
+        report.append(f"[{rname}]  {len(names)} scenes  mode={mode}  "
+                      f"{len(names) * (len(sources) - 1)} transitions")
+        log.warning(f"DIAGNOSE {rname}: {len(names)} scenes, mode={mode}")
 
         for target in names:
             tshort = target.split(".")[-1]
@@ -213,11 +234,13 @@ fields:
                                     f"(stable in {elapsed:.0f}s)")
                     else:
                         n_fail += 1
+                        live = _live_str(members)
                         fails.append(f"{rname}: {sshort} -> {tshort} = {dshort} ({elapsed:.0f}s)")
                         report.append(f"  FAIL {sshort:28} -> {tshort:28} "
                                       f"erkannt: {dshort}  {elapsed:.0f}s")
+                        report.append(f"       live: {live}")
                         log.warning(f"DIAGNOSE FAIL {rname}: {sshort} -> {tshort} "
-                                    f"detected {dshort} (after {elapsed:.0f}s)")
+                                    f"detected {dshort} ({elapsed:.0f}s) live: {live}")
                 except Exception as e:
                     report.append(f"  ERR  {sshort} -> {tshort}: {e}")
                     log.error(f"DIAGNOSE error {rname} {sshort}->{tshort}: {e}")
