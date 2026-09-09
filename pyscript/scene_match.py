@@ -13,7 +13,7 @@ import math
 import time
 from homeassistant.util import slugify
 
-VERSION = "v9"  # bumped on every change; printed in the log to confirm what runs
+VERSION = "v10"  # bumped on every change; printed in the log to confirm what runs
 
 FINGERPRINT_FILE = "/config/scene_fingerprints.json"
 DYNAMIC_SENSOR = "sensor.dynamische_szenen"
@@ -44,7 +44,7 @@ def _group_for(room, lights_all):
 
 ACCEPT = 0.35        # max distance to accept a match
 CLEAR = 0.60         # above this: clearly nothing -> mark room unknown
-KEEP_MARGIN = 0.10   # keep current scene only while within this of the best
+KEEP_MARGIN = 0.08   # keep current scene only while within this of the best
 LOCK_SECONDS = 30    # after a user tap, don't override the room for this long
 LOOP_SECONDS = 15    # background re-evaluation interval (backstop; events drive speed)
 SETTLE_AFTER_CHANGE = 1.5  # min wait after the last change before matching
@@ -68,8 +68,9 @@ BLEND_WEIGHT = 0.3
 # ct4000 matches "Nachtlicht" instead of the warm "Ruhephase" it just became).
 # Capping it lets the reliable brightness decide such cases, while genuine small
 # ct differences (Hell 2702 vs Lesen 2890 -> 0.157) stay well under the cap and
-# are unaffected.
-CT_TERM_CAP = 0.20
+# are unaffected. 0.15 keeps a lamp with a stuck ct below a wrong-brightness
+# rival by more than the keep-margin, so a stale reading can't stick either.
+CT_TERM_CAP = 0.15
 EXCLUDE_SUFFIXES = ("_naturliches_licht",)  # adaptive scenes to ignore
 
 FP = {}
