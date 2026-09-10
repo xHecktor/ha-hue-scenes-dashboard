@@ -125,6 +125,18 @@ input_boolean:
     initial: "on"
 
 
+# When a device taps a scene it becomes the "active" device (keeps its scene
+# order / scroll position while passive displays follow the highlight). This
+# timer is (re)started on every tap; when it elapses -- i.e. a few minutes after
+# the LAST tap on that device -- the device is released back to passive. Adjust
+# `duration` to taste.
+timer:
+  scene_active_device:
+    name: Active scene device idle timer
+    duration: "00:03:00"
+    restore: true
+
+
 script:
   # Tap: activate a scene statically, mark it active instantly, and (re)learn
   # its fingerprint from the resulting light state.
@@ -144,6 +156,13 @@ script:
           entity_id: input_text.scene_active_device
         data:
           value: "{{ device | default('') }}"
+      # (Re)start the idle timer so the device is released back to passive a few
+      # minutes after its last tap. Skipped if no device id was passed.
+      - if: "{{ (device | default('')) != '' }}"
+        then:
+          - action: timer.start
+            target:
+              entity_id: timer.scene_active_device
       - action: scene.turn_on
         target:
           entity_id: "{{ scene }}"
@@ -189,6 +208,11 @@ script:
           entity_id: input_text.scene_active_device
         data:
           value: "{{ device | default('') }}"
+      - if: "{{ (device | default('')) != '' }}"
+        then:
+          - action: timer.start
+            target:
+              entity_id: timer.scene_active_device
       - action: hue.activate_scene
         target:
           entity_id: "{{ scene }}"
@@ -284,6 +308,23 @@ script:
 
 
 automation:
+  # Release the active device back to passive a few minutes after its last tap:
+  # when the idle timer elapses, clear scene_active_device so that device starts
+  # following the active-scene highlight/reorder again like any passive display.
+  - alias: "Scene: release active device when idle"
+    id: scene_active_device_release
+    triggers:
+      - trigger: event
+        event_type: timer.finished
+        event_data:
+          entity_id: timer.scene_active_device
+    actions:
+      - action: input_text.set_value
+        target:
+          entity_id: input_text.scene_active_device
+        data:
+          value: ""
+
   # Apply the per-room speed slider to that room's running dynamic scene.
   # (The dynamic-scene map is pruned by pyscript + scene_select, so no sync
   # automation is needed.)
