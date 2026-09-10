@@ -50,7 +50,16 @@ KEEP_MARGIN = 0.05   # keep current scene only while within this of the best
 LOCK_SECONDS = 30    # after a user tap, don't override the room for this long
 LOOP_SECONDS = 15    # background re-evaluation interval (backstop; events drive speed)
 SETTLE_AFTER_CHANGE = 1.5  # min wait after the last change before matching
-SETTLE_MAX = 8.0           # cap on the extra wait-until-lights-hold-still
+SETTLE_MAX = 12.0          # cap on the extra wait-until-lights-hold-still. Raised
+#                            from 8 s: a few laggy lamps crawl their colour for
+#                            ~10 s after a big jump, and matching before they land
+#                            was the last source of a wrong verdict.
+CONFIRM_COUNT = 2    # an auto-detected scene CHANGE must repeat across this many
+#                      evaluations before it replaces the tracked scene, so a
+#                      single noisy / mid-settle reading can't flip a room. A user
+#                      tap sets the scene instantly (scene_set_active) and is never
+#                      gated by this; steady state is unaffected (a stable reading
+#                      simply confirms on the next evaluation).
 # Scene distance is the MEAN of the per-lamp distances (robust: no single lamp
 # dominates) blended with the single largest per-lamp distance:
 #   distance = (1 - w) * mean + w * max
@@ -116,6 +125,7 @@ EXCLUDE_SUFFIXES = ("_naturliches_licht",)  # adaptive scenes to ignore
 
 FP = {}
 LOCK = {}
+PENDING = {}  # room -> (candidate_scene, consecutive_count) for the switch debounce
 
 
 @pyscript_compile
@@ -494,13 +504,16 @@ def _update_room(room, scenes, ar, lights_all, result):
     if state.get(group) != "on":
         result.pop(room, None)
         LOCK.pop(room, None)
+        PENDING.pop(room, None)
         return f"{room}:off"
     if room in ar:
         result.pop(room, None)
+        PENDING.pop(room, None)
         return f"{room}:dyn"
     current = result.get(room)
     # freshly tapped -> locked, keep
     if current and time.time() < LOCK.get(room, 0):
+        PENDING.pop(room, None)
         return f"{room}:{current.split('.')[-1]}:lock"
     ranked = _ranked(scenes)
     best, d = _best(scenes, current, ranked)
@@ -519,16 +532,37 @@ def _update_room(room, scenes, ar, lights_all, result):
     if current and current in scenes and not _excluded(current):
         dc = _scene_distance(scenes[current])
         if dc is not None and dc <= CLEAR and (d is None or dc <= d + KEEP_MARGIN):
+            PENDING.pop(room, None)
             return f"{room}:{current.split('.')[-1]}=KEEP({round(dc, 2)}){r2}"
     short = best.split(".")[-1] if best else "-"
     act = "hold"
     if best is not None and d is not None:
         if d <= ACCEPT:
-            result[room] = best
-            act = "SET"
+            if best == current:
+                # reaffirming the scene already shown -> apply immediately
+                result[room] = best
+                PENDING.pop(room, None)
+                act = "SET"
+            else:
+                # a CHANGE: require CONFIRM_COUNT consecutive evaluations agreeing
+                # on the same new scene before switching, so one noisy / not-yet-
+                # settled reading can't flip the room. In steady state the very
+                # next evaluation confirms, so this only suppresses transients.
+                cand, cnt = PENDING.get(room, (None, 0))
+                cnt = cnt + 1 if cand == best else 1
+                if cnt >= CONFIRM_COUNT:
+                    result[room] = best
+                    PENDING.pop(room, None)
+                    act = "SET"
+                else:
+                    PENDING[room] = (best, cnt)
+                    act = f"confirm{cnt}/{CONFIRM_COUNT}->{short}"
         elif d >= CLEAR:
             result.pop(room, None)
+            PENDING.pop(room, None)
             act = "CLEAR"
+        else:
+            PENDING.pop(room, None)
     return f"{room}:{short}={round(d, 2) if d is not None else '-'} {act}{r2}"
 
 
@@ -559,11 +593,20 @@ def scene_learn(scene=None, settle=4, **kwargs):
     room = attrs.get("group_name")
     if not room:
         return
+    # Guard against fast tapping through scenes corrupting the database: each tap
+    # starts a learn that waits for the lights to settle before capturing. If a
+    # new scene in the SAME room is tapped first, task.unique cancels this
+    # still-waiting learn so it never records the next scene's light state under
+    # this scene's name. Different rooms keep their own key and run in parallel.
+    task.unique(f"scene_learn_{slugify(room)}")
     lights_all = state.names("light")
     group = _group_for(room, lights_all)
     if group not in lights_all:
         return
     members = (state.getattr(group) or {}).get("entity_id") or []
+    # Only record once the lights have actually stopped moving (>= settle seconds
+    # AND two identical 1 s reads), so a mid-fade / mid-transition state is never
+    # baked into the fingerprint.
     _wait_settled(members, settle)
     entry = {}
     for lid in members:
