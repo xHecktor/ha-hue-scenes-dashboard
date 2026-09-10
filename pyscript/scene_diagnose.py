@@ -692,6 +692,33 @@ def _diverse_pick(cands, k):
     return chosen
 
 
+def _settle_verdict(room, min_wait=4.0, max_wait=25.0):
+    # Read the matcher's verdict only once it has SETTLED. Right after a scene
+    # activation the matcher still shows the PREVIOUS scene (its own settle + the
+    # 2-pass switch debounce), so nudge it to re-evaluate each second and wait
+    # until the verdict holds steady -- otherwise the 100 % baseline reads the
+    # wrong (previous) scene and looks like a false break.
+    prev = None
+    stable = 0
+    waited = 0.0
+    while waited < max_wait:
+        try:
+            pyscript.scene_match_all()
+        except Exception:
+            pass
+        task.sleep(1.0)
+        waited += 1.0
+        det = _detected(room)
+        if det == prev:
+            stable += 1
+        else:
+            stable = 0
+            prev = det
+        if stable >= 2 and waited >= min_wait:
+            return det
+    return _detected(room)
+
+
 def _wait_hold(labeled, settle, max_wait=20.0):
     # Wait >= settle seconds AND until two 1 s reads are identical, so drift is
     # measured only once the lamps have stopped moving at the new brightness.
@@ -844,25 +871,29 @@ def _dim_drift_run(room=None, scenes=None, levels=None, settle=4, top=3):
                             pass
                         task.sleep(0.3)   # space commands, protect the bridge
                     _wait_hold(labeled, settle)
-                det = _detected(rname)
+                det = _settle_verdict(rname)
                 dshort = det.split(".")[-1] if det else "-"
-                verdicts.append(f"{lvl}%={dshort}")
-                if first_break is None and dshort != sshort:
-                    first_break = lvl
-                # per-lamp drift line for this level (colourful lamps only)
+                # Largest per-lamp colour drift at this level. Hue holds xy
+                # constant across brightness, so this is normally ~0; only lamps
+                # that actually moved are logged (keeps the report readable).
+                maxdrift = 0.0
                 for lname, lid in labeled:
                     r0 = ref.get(lname) or {}
                     if not r0.get("on") or not r0.get("xy"):
                         continue
-                    if _colorfulness(r0["xy"]) < 0.08:
-                        continue
                     cur = _lamp_state(lid)
                     dxy = _xy_dist(cur.get("xy"), r0.get("xy"))
-                    drift = f"Δxy{dxy:.3f}" if dxy is not None else "Δxy-"
-                    _write_report_line(
-                        DRIFT_REPORT_FILE,
-                        f"     {lname:20s} {lvl:3d}%: b{cur.get('b')} "
-                        f"xy{cur.get('xy')} ct{cur.get('ct')} {drift}")
+                    if dxy is None:
+                        continue
+                    if dxy > maxdrift:
+                        maxdrift = dxy
+                    if dxy > 0.01:
+                        _write_report_line(
+                            DRIFT_REPORT_FILE,
+                            f"     drift {lname:18s} {lvl:3d}%: xy{cur.get('xy')} Δ{dxy:.3f}")
+                verdicts.append(f"{lvl}%={dshort} maxΔ{maxdrift:.2f}")
+                if first_break is None and dshort != sshort:
+                    first_break = lvl
             _write_report_line(DRIFT_REPORT_FILE, "     verdict/level: " + "  ".join(verdicts))
             if first_break:
                 breaks.append((rname, sshort, first_break))
