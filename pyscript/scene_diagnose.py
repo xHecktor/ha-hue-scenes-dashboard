@@ -32,8 +32,12 @@ VERSION = "d10"
 # (and cancelled) the moment the service function returns.
 _DIAG_TASK = None
 
-FINGERPRINT_FILE = "/config/scene_fingerprints.json"
-REPORT_FILE = "/config/scene_diagnose_report.txt"
+# All persistent data lives under one folder (was scattered in /config root).
+DATA_DIR = "/config/hue_scenes"
+FINGERPRINT_FILE = DATA_DIR + "/fingerprints.json"
+_LEGACY_FINGERPRINT_FILE = "/config/scene_fingerprints.json"
+REPORT_FILE = DATA_DIR + "/diagnose_report.txt"
+DRIFT_REPORT_FILE = DATA_DIR + "/dim_drift_report.txt"
 TRACKER = "pyscript.scene_tracker"
 EXCLUDE_SUFFIXES = ("_naturliches_licht",)
 
@@ -62,8 +66,11 @@ def _write_report_line(path, line):
 
 @pyscript_compile
 def _init_report(path, room, settle, mode):
-    import datetime
+    import datetime, os
     try:
+        d = os.path.dirname(path)
+        if d:
+            os.makedirs(d, exist_ok=True)
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with open(path, "w", encoding="utf-8") as f:
             f.write(f"scene_diagnose {VERSION}  {now}\n")
@@ -420,6 +427,8 @@ def _diagnose_run(room=None, settle=4, mode="full"):
 
     try:
         db = task.executor(_read_json, FINGERPRINT_FILE)
+        if not db:
+            db = task.executor(_read_json, _LEGACY_FINGERPRINT_FILE)
     except Exception as e:
         log.error(f"DIAGNOSE: could not read fingerprint file: {e}")
         return
@@ -557,3 +566,217 @@ def _diagnose_run(room=None, settle=4, mode="full"):
         for f in fails:
             _write_report_line(REPORT_FILE, f"  {f}")
     log.warning(f"DIAGNOSE report written to {REPORT_FILE}")
+
+
+# ---------------------------------------------------------------------------
+# Dim-drift probe: how each lamp's reported colour drifts as a scene is dimmed
+# hard, and at which brightness the live matcher stops recognising the scene.
+# Auto-selects the most *colourful* scenes per room (the ones where deep dimming
+# is a real risk); warm/white scenes are uninteresting here.
+# ---------------------------------------------------------------------------
+
+_DRIFT_TASK = None
+_DIM_LEVELS = (100, 50, 25, 12, 6)   # percent of each lamp's own scene brightness
+
+# Planckian (white/colour-temperature) locus in xy -- distance off it = "how
+# colourful" (0 for any white/warm tint, large for a saturated colour).
+_DLOCUS = ((0.5267, 0.4133), (0.4909, 0.4173), (0.4578, 0.4102), (0.4369, 0.4041),
+           (0.4009, 0.3827), (0.3805, 0.3768), (0.3608, 0.3636), (0.3451, 0.3516),
+           (0.3287, 0.3417), (0.3123, 0.3282))
+
+
+@pyscript_compile
+def _colorfulness(xy):
+    import math
+    best = 1.0
+    for i in range(len(_DLOCUS) - 1):
+        ax, ay = _DLOCUS[i]
+        bx, by = _DLOCUS[i + 1]
+        dx, dy = bx - ax, by - ay
+        L = dx * dx + dy * dy
+        t = 0.0 if L == 0 else max(0.0, min(1.0, ((xy[0] - ax) * dx + (xy[1] - ay) * dy) / L))
+        d = math.hypot(xy[0] - (ax + t * dx), xy[1] - (ay + t * dy))
+        if d < best:
+            best = d
+    return best
+
+
+def _scene_colorfulness(entry):
+    # Mean off-locus distance of the scene's on-lamps that carry an xy colour.
+    vals = []
+    for rec in entry.values():
+        if not isinstance(rec, dict) or rec.get("off") or not rec.get("xy"):
+            continue
+        vals.append(_colorfulness(rec["xy"]))
+    return sum(vals) / len(vals) if vals else 0.0
+
+
+@pyscript_compile
+def _xy_dist(a, b):
+    import math
+    if not a or not b:
+        return None
+    return math.hypot(a[0] - b[0], a[1] - b[1])
+
+
+def _wait_hold(labeled, settle, max_wait=20.0):
+    # Wait >= settle seconds AND until two 1 s reads are identical, so drift is
+    # measured only once the lamps have stopped moving at the new brightness.
+    prev = None
+    waited = 0.0
+    while waited < max_wait:
+        task.sleep(1.0)
+        waited += 1.0
+        snap = tuple(str(_lamp_state(lid)) for _, lid in labeled)
+        if snap == prev and waited >= float(settle):
+            return
+        prev = snap
+
+
+@service
+def scene_dim_drift(room=None, scenes=None, levels=None, settle=4, top=3):
+    """yaml
+name: Diagnose dim drift (colour vs brightness)
+description: For the most colourful scenes (auto-selected), activate the scene
+  then step every lamp down through several brightness levels, recording how
+  each lamp's reported colour drifts and at which level the live matcher stops
+  recognising the scene. Writes /config/hue_scenes/dim_drift_report.txt. Runs in
+  the background; read-only (restores nothing -- next activation resets state).
+fields:
+  room:
+    description: Only this room (group_name). Empty = whole home.
+    example: Wohnzimmer
+  scenes:
+    description: Comma-separated scene slugs to force (overrides auto-select).
+    example: wohnzimmer_rio,wohnzimmer_blue_planet
+  top:
+    description: How many of the most colourful scenes per room to probe.
+    example: 3
+  settle:
+    description: Seconds to hold each brightness level before measuring.
+    example: 4
+"""
+    global _DRIFT_TASK
+    _DRIFT_TASK = task.create(_dim_drift_run, room, scenes, levels, settle, top)
+    log.warning(f"DIM-DRIFT {VERSION}: spawned (room={room or 'all'}) -> {DRIFT_REPORT_FILE}")
+
+
+def _dim_drift_run(room=None, scenes=None, levels=None, settle=4, top=3):
+    task.unique("scene_dim_drift")
+    if not _init_report(DRIFT_REPORT_FILE, room, settle, "dim-drift"):
+        log.error("DIM-DRIFT: report not writable")
+        return
+    lvls = _DIM_LEVELS
+    if levels:
+        try:
+            lvls = tuple(int(x) for x in str(levels).replace(" ", "").split(","))
+        except Exception:
+            pass
+    forced = None
+    if scenes:
+        forced = set(s.strip() for s in str(scenes).split(",") if s.strip())
+
+    db = task.executor(_read_json, FINGERPRINT_FILE)
+    if not db:
+        db = task.executor(_read_json, _LEGACY_FINGERPRINT_FILE)
+    if not db:
+        _write_report_line(DRIFT_REPORT_FILE, "ERROR: fingerprint database empty")
+        return
+
+    lights_all = state.names("light")
+    breaks = []   # (room, scene, first level where detection fails)
+    for rname, entries in db.items():
+        group = _group_for(rname, lights_all)
+        if not group or group not in lights_all:
+            continue
+        members = (state.getattr(group) or {}).get("entity_id") or []
+        if not room and members and len(members) > 0.6 * len(lights_all):
+            _write_report_line(DRIFT_REPORT_FILE, f"[{rname}] SKIPPED - meta-zone")
+            continue
+        if room and slugify(rname) != slugify(room):
+            continue
+
+        # choose scenes: forced, else the `top` most colourful (skip warm/white)
+        ranked = []
+        for full, entry in entries.items():
+            sshort = full.split(".")[-1]
+            if _excluded(full):
+                continue
+            if forced is not None:
+                if sshort in forced:
+                    ranked.append((1.0, full, entry))
+                continue
+            cf = _scene_colorfulness(entry)
+            if cf >= 0.08:
+                ranked.append((cf, full, entry))
+        ranked.sort(reverse=True)
+        if forced is None:
+            ranked = ranked[:int(top)]
+        if not ranked:
+            continue
+
+        labeled = [(lid.split(".")[-1], lid) for lid in members]
+        _write_report_line(DRIFT_REPORT_FILE,
+                           f"[{rname}]  group={group}  ({len(ranked)} colourful scenes)")
+
+        for cf, full, entry in ranked:
+            sshort = full.split(".")[-1]
+            try:
+                scene.turn_on(entity_id=full)
+            except Exception as e:
+                _write_report_line(DRIFT_REPORT_FILE, f"  {sshort}: activate failed {e}")
+                continue
+            _wait_hold(labeled, settle)
+            # reference (full-brightness) per-lamp state
+            ref = {}
+            for lname, lid in labeled:
+                ref[lname] = _lamp_state(lid)
+            _write_report_line(DRIFT_REPORT_FILE, f"\n  {sshort}  (colourfulness {cf:.3f})")
+            verdicts = []
+            first_break = None
+            for lvl in lvls:
+                if lvl < 100:
+                    for lname, lid in labeled:
+                        r = ref.get(lname) or {}
+                        if not r.get("on") or not r.get("b"):
+                            continue
+                        tb = max(1, int(round(r["b"] * lvl / 100.0)))
+                        try:
+                            light.turn_on(entity_id=lid, brightness=tb)
+                        except Exception:
+                            pass
+                        task.sleep(0.3)   # space commands, protect the bridge
+                    _wait_hold(labeled, settle)
+                det = _detected(rname)
+                dshort = det.split(".")[-1] if det else "-"
+                verdicts.append(f"{lvl}%={dshort}")
+                if first_break is None and dshort != sshort:
+                    first_break = lvl
+                # per-lamp drift line for this level (colourful lamps only)
+                for lname, lid in labeled:
+                    r0 = ref.get(lname) or {}
+                    if not r0.get("on") or not r0.get("xy"):
+                        continue
+                    if _colorfulness(r0["xy"]) < 0.08:
+                        continue
+                    cur = _lamp_state(lid)
+                    dxy = _xy_dist(cur.get("xy"), r0.get("xy"))
+                    drift = f"Δxy{dxy:.3f}" if dxy is not None else "Δxy-"
+                    _write_report_line(
+                        DRIFT_REPORT_FILE,
+                        f"     {lname:20s} {lvl:3d}%: b{cur.get('b')} "
+                        f"xy{cur.get('xy')} ct{cur.get('ct')} {drift}")
+            _write_report_line(DRIFT_REPORT_FILE, "     verdict/level: " + "  ".join(verdicts))
+            if first_break:
+                breaks.append((rname, sshort, first_break))
+                _write_report_line(DRIFT_REPORT_FILE,
+                                   f"     -> Erkennung bricht bei {first_break}%")
+            else:
+                _write_report_line(DRIFT_REPORT_FILE,
+                                   f"     -> bis {lvls[-1]}% korrekt erkannt")
+
+    _write_report_line(DRIFT_REPORT_FILE, "")
+    _write_report_line(DRIFT_REPORT_FILE, f"DIM-DRIFT done: {len(breaks)} Szenen brechen vor dem tiefsten Level")
+    for r, s, lvl in breaks:
+        _write_report_line(DRIFT_REPORT_FILE, f"  {r}: {s} -> {lvl}%")
+    log.warning(f"DIM-DRIFT report written to {DRIFT_REPORT_FILE}")

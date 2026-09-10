@@ -50,7 +50,7 @@ marks scenes that support dynamic mode.
 1. `scene_fingerprint_calibrate` (pyscript) activates each room scene once and
    records the resulting per-light state (`brightness` + `color_temp` or `xy`,
    **including which member lights stay off**) into
-   `/config/scene_fingerprints.json`. That off/on subset is what tells apart
+   `/config/hue_scenes/fingerprints.json`. That off/on subset is what tells apart
    scenes lighting up different parts of a group (e.g. *gedimmt Diele* vs
    *gedimmt kleiner Flur*).
 2. `scene_match.py` runs a small loop that compares the live lights of each room
@@ -134,7 +134,7 @@ data:
   parallel: 3        # rooms in parallel (whole-home); 1 = sequential
 ```
 
-A readable log is written to **`/config/scene_calibrate_log.txt`**, flushed
+A readable log is written to **`/config/hue_scenes/calibrate_log.txt`**, flushed
 line by line (crash-safe, shows which attributes were marked don't-care per
 lamp). The whole run is a background task, so the action returns immediately.
 
@@ -162,8 +162,31 @@ PASS/FAIL, ending with a summary and the slowest stabilisation seen (a good
 basis for the matcher's settle). It only reads — it never changes the database.
 
 Because the Home Assistant log UI collapses repeated lines and hides most
-runs, the **full report is also written to `/config/scene_diagnose_report.txt`**
+runs, the **full report is also written to `/config/hue_scenes/diagnose_report.txt`**
 (overwritten each run) — open that for the complete per-transition list.
+
+### Dim drift (deep-dimming a colour scene)
+
+`pyscript.scene_dim_drift` measures how well detection survives when you turn a
+**colourful** scene far down. It auto-selects the most colourful scenes per room,
+activates each, then steps every lamp through decreasing brightness levels
+(100 → 50 → 25 → 12 → 6 %), recording per lamp how the reported colour drifts and
+at which level the live matcher stops recognising the scene:
+
+```yaml
+action: pyscript.scene_dim_drift
+data:
+  room: Wohnzimmer     # empty = whole home
+  # scenes: wohnzimmer_rio,wohnzimmer_blue_planet   # optional: force a set
+```
+
+The report is written to **`/config/hue_scenes/dim_drift_report.txt`**. It is
+read-only and restores nothing (the next activation resets the lights).
+
+> All persistent data lives under **`/config/hue_scenes/`** (`fingerprints.json`,
+> `calibrate_log.txt`, `diagnose_report.txt`, `dim_drift_report.txt`). The folder
+> is created automatically; an existing `/config/scene_fingerprints.json` from an
+> older install is read as a fallback until the next calibration migrates it.
 
 ## Per-room setup
 

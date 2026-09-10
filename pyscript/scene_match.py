@@ -15,7 +15,13 @@ from homeassistant.util import slugify
 
 VERSION = "v15"  # bumped on every change; printed in the log to confirm what runs
 
-FINGERPRINT_FILE = "/config/scene_fingerprints.json"
+# All persistent data for this integration lives in one folder so it is easy to
+# find and back up (was scattered as scene_*.* in /config root). The old paths
+# are still read as a fallback so an existing install keeps working until the
+# next calibration writes the file to its new home.
+DATA_DIR = "/config/hue_scenes"
+FINGERPRINT_FILE = DATA_DIR + "/fingerprints.json"
+_LEGACY_FINGERPRINT_FILE = "/config/scene_fingerprints.json"
 DYNAMIC_SENSOR = "sensor.dynamische_szenen"
 TRACKER = "pyscript.scene_tracker"
 
@@ -139,7 +145,10 @@ def _read_json(path):
 
 @pyscript_compile
 def _write_json(path, data):
-    import json
+    import json, os
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
     with open(path, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
@@ -266,6 +275,9 @@ def _wait_settled(members, settle, max_wait=45.0):
 def _load():
     global FP
     FP = task.executor(_read_json, FINGERPRINT_FILE)
+    if not FP:
+        # fall back to the pre-v16 location (/config/scene_fingerprints.json)
+        FP = task.executor(_read_json, _LEGACY_FINGERPRINT_FILE)
     total = 0
     for v in FP.values():
         total += len(v)

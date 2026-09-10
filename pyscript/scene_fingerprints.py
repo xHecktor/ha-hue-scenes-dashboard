@@ -13,8 +13,11 @@ Requires pyscript with `allow_all_imports: true`.
 import json
 from homeassistant.util import slugify
 
-FINGERPRINT_FILE = "/config/scene_fingerprints.json"
-CALIB_LOG = "/config/scene_calibrate_log.txt"
+# All persistent data lives under one folder (was scattered in /config root).
+DATA_DIR = "/config/hue_scenes"
+FINGERPRINT_FILE = DATA_DIR + "/fingerprints.json"
+_LEGACY_FINGERPRINT_FILE = "/config/scene_fingerprints.json"
+CALIB_LOG = DATA_DIR + "/calibrate_log.txt"
 
 # Hue-bridge protection: every scene/light command from every worker passes
 # through one gate that spaces commands by at least this many seconds, so
@@ -24,13 +27,17 @@ MIN_CMD_INTERVAL = 0.5
 _cmd_busy = [False]     # list holders = module-mutable without `global`
 _writing = [False]      # serialises DB file writes across parallel workers
 _scene_count = [0]      # scenes finished (for the dashboard status)
+_total = [0]            # total scenes to do this run (for the X/N progress counter)
 _abort = [False]        # set by the stop service; workers check and bail out
 
 
 @pyscript_compile
 def _clog_init(path, room, contrast, parallel):
-    import datetime
+    import datetime, os
     try:
+        d = os.path.dirname(path)
+        if d:
+            os.makedirs(d, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(f"scene_calibrate  {datetime.datetime.now():%Y-%m-%d %H:%M:%S}\n")
             f.write(f"room={room or 'all'}  contrast={contrast}  parallel={parallel}\n\n")
@@ -79,7 +86,10 @@ def _read_json(path):
 
 @pyscript_compile
 def _write_json(path, data):
-    import json
+    import json, os
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
     with open(path, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
@@ -327,7 +337,11 @@ def _calibrate_room(rname, group, scene_list, settle, contrast, db):
             if dcs:
                 line += "  don't-care: " + "; ".join(dcs)
             _clog(CALIB_LOG, line)
-            _status(f"{rname}: {name} ({_scene_count[0]})", True)
+            done = _scene_count[0]
+            tot = _total[0]
+            pct = f" {int(100 * done / tot)}%" if tot else ""
+            counter = f"{done}/{tot}" if tot else f"{done}"
+            _status(f"{rname}: {name}  ({counter}{pct})", True)
             log.warning(f"CALIB {rname}: {name}" + (f"  dc={dcs}" if dcs else ""))
         except Exception as e:
             _clog(CALIB_LOG, f"  {rname}: {name}  ERROR {e}")
@@ -399,12 +413,16 @@ def _calibrate_run(room=None, settle=4, contrast=True, parallel=1):
     _cmd_busy[0] = False
     _writing[0] = False
     _scene_count[0] = 0
+    _total[0] = 0
     _abort[0] = False
     _clog_init(CALIB_LOG, room, contrast, parallel)
     _status(f"Kalibriere {room or 'alle Räume'} …", True)
     log.warning(f"CALIB worker started (room={room or 'all'}, contrast={contrast})")
 
     db = task.executor(_read_json, FINGERPRINT_FILE)
+    if not db:
+        # migrate: seed from the pre-v16 location if the new file isn't there yet
+        db = task.executor(_read_json, _LEGACY_FINGERPRINT_FILE)
     if room:
         for k in list(db.keys()):
             if slugify(k) == slugify(room):
@@ -441,6 +459,7 @@ def _calibrate_run(room=None, settle=4, contrast=True, parallel=1):
     total = 0
     for rn in rooms:
         total += len(rooms[rn]["scenes"])
+    _total[0] = total   # feeds the "X/N" progress counter on the dashboard
     _clog(CALIB_LOG, f"{len(rooms)} rooms, {total} scenes\n")
 
     queue = list(rooms.keys())
