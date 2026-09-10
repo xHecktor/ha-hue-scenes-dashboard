@@ -443,6 +443,14 @@ def _diagnose_run(room=None, settle=4, mode="full"):
             _write_report_line(REPORT_FILE, f"[{rname}] SKIPPED - no Hue group")
             continue
         members = (state.getattr(group) or {}).get("entity_id") or []
+        # Skip whole-home meta-zones (a group spanning most lamps, e.g. an
+        # "apartment" zone): huge settles stall the run and they overlap every
+        # room. Still diagnosable by naming that zone explicitly.
+        if not room and len(lights_all) and len(members) > 0.6 * len(lights_all):
+            _write_report_line(
+                REPORT_FILE,
+                f"[{rname}] SKIPPED - meta-zone ({len(members)}/{len(lights_all)} lamps)")
+            continue
 
         names = []
         for s in scenes:

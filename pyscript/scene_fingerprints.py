@@ -426,6 +426,14 @@ def _calibrate_run(room=None, settle=4, contrast=False, parallel=1):
         if g not in lights_all:
             _clog(CALIB_LOG, f"[{rn}] skipped (no Hue group)")
             continue
+        # Skip whole-home meta-zones (a group spanning most lamps, e.g. an
+        # "apartment" zone) on whole-home runs -- fingerprinting them is
+        # pointless (they overlap every room) and their huge settles stall the
+        # run. Still allowed if the user calibrates that zone by name.
+        gm = (state.getattr(g) or {}).get("entity_id") or []
+        if not room and len(lights_all) and len(gm) > 0.6 * len(lights_all):
+            _clog(CALIB_LOG, f"[{rn}] skipped (meta-zone, {len(gm)}/{len(lights_all)} lamps)")
+            continue
         rooms.setdefault(rn, {"group": g, "scenes": []})
         rooms[rn]["scenes"].append((eid, a.get("name") or eid))
 
