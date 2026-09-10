@@ -616,6 +616,7 @@ def _colorfulness(xy):
     return best
 
 
+@pyscript_compile
 def _scene_colorfulness(entry):
     # Mean off-locus distance of the scene's on-lamps that carry an xy colour.
     vals = []
@@ -634,6 +635,7 @@ def _xy_dist(a, b):
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
+@pyscript_compile
 def _scene_feature(entry):
     # (colourfulness, mean_hue_deg or None) describing where a scene sits in
     # colour space. Hue is the saturation-weighted circular mean of the on-lamps,
@@ -653,6 +655,7 @@ def _scene_feature(entry):
     return cf, hue
 
 
+@pyscript_compile
 def _diverse_pick(cands, k):
     # Farthest-point sampling over (colourfulness, hue): start from the most
     # colourful scene, then repeatedly add the candidate most different from the
@@ -697,7 +700,10 @@ def _wait_hold(labeled, settle, max_wait=20.0):
     while waited < max_wait:
         task.sleep(1.0)
         waited += 1.0
-        snap = tuple(str(_lamp_state(lid)) for _, lid in labeled)
+        parts = []
+        for _lbl, lid in labeled:
+            parts.append(str(_lamp_state(lid)))
+        snap = tuple(parts)
         if snap == prev and waited >= float(settle):
             return
         prev = snap
@@ -737,15 +743,24 @@ def _dim_drift_run(room=None, scenes=None, levels=None, settle=4, top=3):
     if not _init_report(DRIFT_REPORT_FILE, room, settle, "dim-drift"):
         log.error("DIM-DRIFT: report not writable")
         return
-    lvls = _DIM_LEVELS
+    # explicit loops (no genexps/comprehensions -- pyscript interprets this
+    # function and only supports those inside @pyscript_compile helpers)
+    lvls = list(_DIM_LEVELS)
     if levels:
         try:
-            lvls = tuple(int(x) for x in str(levels).replace(" ", "").split(","))
+            lvls = []
+            for x in str(levels).replace(" ", "").split(","):
+                if x:
+                    lvls.append(int(x))
         except Exception:
-            pass
+            lvls = list(_DIM_LEVELS)
     forced = None
     if scenes:
-        forced = set(s.strip() for s in str(scenes).split(",") if s.strip())
+        forced = set()
+        for s in str(scenes).split(","):
+            s = s.strip()
+            if s:
+                forced.add(s)
 
     db = task.executor(_read_json, FINGERPRINT_FILE)
     if not db:
@@ -776,9 +791,11 @@ def _dim_drift_run(room=None, scenes=None, levels=None, settle=4, top=3):
         # (which survive dimming) and the borderline/pastel ones (which break) --
         # not just a cluster of the brightest. Pure white/warm scenes (cf < 0.05)
         # are skipped: their drift is the uninteresting collapse target.
+        ranked = []
         if forced is not None:
-            ranked = [(1.0, full, entry) for full, entry in entries.items()
-                      if full.split(".")[-1] in forced and not _excluded(full)]
+            for full, entry in entries.items():
+                if full.split(".")[-1] in forced and not _excluded(full):
+                    ranked.append((1.0, full, entry))
         else:
             cands = []
             for full, entry in entries.items():
@@ -788,11 +805,14 @@ def _dim_drift_run(room=None, scenes=None, levels=None, settle=4, top=3):
                 if cf >= 0.05:
                     cands.append((cf, hue, full, entry))
             picked = _diverse_pick(cands, int(top))
-            ranked = [(c[0], c[2], c[3]) for c in picked]
+            for c in picked:
+                ranked.append((c[0], c[2], c[3]))
         if not ranked:
             continue
 
-        labeled = [(lid.split(".")[-1], lid) for lid in members]
+        labeled = []
+        for lid in members:
+            labeled.append((lid.split(".")[-1], lid))
         _write_report_line(DRIFT_REPORT_FILE,
                            f"[{rname}]  group={group}  ({len(ranked)} colourful scenes)")
 
