@@ -119,6 +119,10 @@ input_boolean:
   calibrate_contrast:
     name: Contrast mode (thorough)
     icon: mdi:contrast-box
+    # Default ON: contrast is the reliable way to detect uncontrolled attributes
+    # (a scene that leaves a lamp's colour temperature free, etc.). Turn it off
+    # only for a quick re-capture of scenes you know drive every lamp.
+    initial: "on"
 
 
 script:

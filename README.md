@@ -102,15 +102,16 @@ data:
 The lights flash briefly through every scene. After that the tracker fills
 within a few seconds and stays fresh on its own (learn-on-tap).
 
-**Contrast mode (thorough).** If a scene shares a group with a lamp it does
-*not* control (that lamp then holds whatever a previous scene left, polluting
-the fingerprint), calibrate with `contrast: true`:
+**Contrast mode (thorough, default on).** If a scene shares a group with a lamp
+it does *not* control (that lamp then holds whatever a previous scene left,
+polluting the fingerprint), contrast calibration detects it. It runs **by
+default**; pass `contrast: false` only for a quick re-capture of scenes you know
+drive every lamp:
 
 ```yaml
 action: pyscript.scene_fingerprint_calibrate
 data:
-  room: Badezimmer
-  contrast: true
+  room: Badezimmer      # contrast: true is the default
 ```
 
 Each scene is run **twice from opposite starting states** (warm+bright vs
@@ -205,13 +206,21 @@ List the exact room names with:
 Fingerprint matching is inherently approximate:
 
 - **Identical scenes** (same colours/brightness) can't be told apart.
-- **Very dim scenes** are matched mainly by brightness and on/off: a lamp's
-  colour is weighted by how bright it is, because Hue reports colour
-  unreliably at low brightness. Two equally dim scenes that differ only in
-  tint may therefore be treated as the same. Brightness itself is compared on
-  a square-root scale, which stays sensitive both at the dim end (7 vs 23) and
-  in the middle (90 vs 143), so scenes that differ only in brightness can be
-  told apart.
+- **Very dim scenes** are matched mainly by brightness and on/off, because Hue
+  reports colour unreliably at low brightness — but only for **near-white**
+  tints. A **saturated** colour (a lamp well off the white/colour-temperature
+  locus) keeps full colour weight even when dim, and if you turn such a scene
+  *below* its captured brightness the brightness penalty is capped, so a deeply
+  dimmed colour scene is still recognised by its colour (down to ~single-digit
+  %) instead of collapsing into a warm night-light. Two equally dim **warm**
+  scenes that differ only in tint may still be treated as the same. Brightness
+  is compared on a square-root scale, sensitive both at the dim end (7 vs 23)
+  and in the middle (90 vs 143), so warm scenes that differ only in brightness
+  (e.g. *Entspannen* vs *Ruhephase*) are still told apart.
+- **A lamp switched off / unavailable** (power cut at the wall, zigbee dropout)
+  is treated as a wildcard, and an on/off mismatch is a bounded penalty kept out
+  of the worst-lamp term — one missing lamp can't drag the room's match off what
+  the remaining lamps' colours clearly say.
 - **Subset scenes** (a scene that only touches one lamp of a bigger group)
   need calibration to record the other lamps as *off* — otherwise the scene
   matches any state where its one lamp happens to look right. Re-run

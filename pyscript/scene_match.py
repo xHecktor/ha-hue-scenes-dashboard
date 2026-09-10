@@ -13,7 +13,7 @@ import math
 import time
 from homeassistant.util import slugify
 
-VERSION = "v14"  # bumped on every change; printed in the log to confirm what runs
+VERSION = "v15"  # bumped on every change; printed in the log to confirm what runs
 
 FINGERPRINT_FILE = "/config/scene_fingerprints.json"
 DYNAMIC_SENSOR = "sensor.dynamische_szenen"
@@ -61,8 +61,17 @@ SETTLE_MAX = 8.0           # cap on the extra wait-until-lights-hold-still
 # while uniformly-differing pairs (mean == max) are untouched. Blend only ever
 # raises cross-scene distances (better separation); a true scene still matches
 # itself at ~0. Set to 0 for pure mean; raise toward ~0.5 for even tighter
-# separation at the cost of a single noisy lamp mattering more.
-BLEND_WEIGHT = 0.3
+# separation at the cost of a single noisy lamp mattering more. 0.2 (was 0.3):
+# an offline replay of a full-home diagnose (1516 transitions) showed 0.2 keeps
+# the tight-pair separation while letting a single noisy/mode-flipping lamp
+# (e.g. a colour-play bar reporting xy one moment, ct the next) count for less.
+BLEND_WEIGHT = 0.2
+# Penalty for a lamp whose on/off state disagrees with the fingerprint. Kept
+# below 1.0 and (see aggregation) OUT of the blend max, so a single accidentally
+# powered-off / unavailable lamp cannot alone push an otherwise well-matching
+# room over CLEAR -- "one lamp off doesn't change the colours of the rest".
+# On/off still discriminates subset scenes because those differ in SEVERAL lamps.
+OFF_PENALTY = 0.5
 # Cap on a single lamp's colour-temperature distance term. A laggy Hue lamp can
 # keep reporting the PREVIOUS scene's ct for many seconds after a change (its
 # brightness updates at once), and an uncapped ct term then dominates and picks
@@ -75,8 +84,34 @@ BLEND_WEIGHT = 0.3
 # KEEP_MARGIN 0.05 is the corner that gets all 90 transitions right. Higher lets
 # an unreliable ct override brightness (Ruhephase read as Entspannen); lower
 # collapses the all-b255 scenes (Hell/Lesen/Kühl hell/...) that differ ONLY in
-# ct into each other.
-CT_TERM_CAP = 0.10
+# ct into each other. 0.20 (was 0.10) makes colour primary: the full-home replay
+# proved the all-b255 white scenes (Arbeitszimmer Konzentrieren vs Kühl hell,
+# ~100-500 K apart) need it to separate. It relies on uncontrolled ct being
+# flagged `dontcare:["ct"]` (contrast calibration) so a stale/laggy ct that the
+# scene doesn't actually drive can't dominate -- without those flags a warm
+# scene's polluted ct would win at this cap.
+CT_TERM_CAP = 0.20
+# Colour reliability when dim. Brightness normally down-weights the colour term
+# (a dim lamp's colour is barely visible / Hue reports it noisily). But that
+# collapsed strongly-coloured scenes when dimmed hard (a deep-red or blue scene
+# turned down to ~6% was read as the warm "Nachtlicht"). Two refinements keep
+# saturated colour reliable when dim:
+#  * COLOUR WEIGHT uses max(saturation, sqrt(brightness)) -- a saturated colour
+#    (far from white) keeps full weight even when dim; a near-white tint still
+#    gets the brightness down-weight (its xy is unreliable there anyway).
+#  * DEEP-DIM CAP: for a colourful lamp (off the white/ct locus) that the user
+#    has dimmed BELOW its fingerprint brightness, the brightness-distance term is
+#    capped, so a big manual dim can't reject a clear colour match. Asymmetric
+#    (only when live < fingerprint) so it never makes matching more permissive in
+#    the normal case -- offline replay: colours stay identified down to ~1-3%
+#    with zero new mismatches. Warm-white pairs that differ only in brightness
+#    (Entspannen vs Ruhephase) are on the locus, so the cap never touches them.
+CF_THRESHOLD = 0.10   # xy-distance from the Planckian locus above which a colour
+#                       counts as "saturated / colourful" (warm whites are <0.06)
+BRI_TERM_CAP = 0.15   # cap on a colourful, dimmed-below-fingerprint lamp's bri term
+_LOCUS = ((0.5267, 0.4133), (0.4909, 0.4173), (0.4578, 0.4102), (0.4369, 0.4041),
+          (0.4009, 0.3827), (0.3805, 0.3768), (0.3608, 0.3636), (0.3451, 0.3516),
+          (0.3287, 0.3417), (0.3123, 0.3282))  # Planckian (white/ct) locus in xy
 EXCLUDE_SUFFIXES = ("_naturliches_licht",)  # adaptive scenes to ignore
 
 FP = {}
@@ -136,6 +171,35 @@ def _fp_light(ml, is_on):
     elif hs:
         rec["pc"] = "hs"
     return rec
+
+
+@pyscript_compile
+def _colorfulness(xy):
+    # Minimum distance from the Planckian (white/colour-temperature) locus in xy.
+    # ~0 for any white or warm tint (which lie on the locus), large for a
+    # saturated colour (blue/green/magenta lie well off it). This -- not distance
+    # from the D65 white point -- is what tells "colourful" from "warm white",
+    # because a warm 2200 K white is far from D65 yet still a white.
+    import math
+    best = 1.0
+    for i in range(len(_LOCUS) - 1):
+        ax, ay = _LOCUS[i]
+        bx, by = _LOCUS[i + 1]
+        dx, dy = bx - ax, by - ay
+        L = dx * dx + dy * dy
+        t = 0.0 if L == 0 else max(0.0, min(1.0, ((xy[0] - ax) * dx + (xy[1] - ay) * dy) / L))
+        d = math.hypot(xy[0] - (ax + t * dx), xy[1] - (ay + t * dy))
+        if d < best:
+            best = d
+    return best
+
+
+@pyscript_compile
+def _saturation(xy):
+    # 0..1 saturation as xy-distance from the D65 white point (0.20 ~ fully
+    # saturated). Used only to keep a saturated colour's weight up when dim.
+    import math
+    return min(math.hypot(xy[0] - 0.3127, xy[1] - 0.3290) / 0.20, 1.0)
 
 
 def _snap(members):
@@ -221,7 +285,8 @@ def _light_snapshot():
 
 
 def _scene_distance(lights):
-    dists = []
+    dists = []       # per-lamp brightness/colour distances of agreeing-on lamps
+    off_pens = []    # on/off mismatch penalties (kept out of the blend max)
     for lid, fp in lights.items():
         # `dontcare` marks what a contrast calibration proved this scene does
         # NOT control. Legacy value True = the whole lamp is a wildcard (it
@@ -238,6 +303,11 @@ def _scene_distance(lights):
         # cycling colours and would only add noise -> treat it as a wildcard
         # so a foreign-dynamic light can never disturb this room's match.
         if attrs.get("dynamics") == "dynamic_palette":
+            continue
+        # An unavailable lamp (power cut at the switch, zigbee dropout) carries no
+        # information about the scene -> treat it as a wildcard. One lamp being
+        # off the mains must not change what the colours of the rest say.
+        if state.get(lid) == "unavailable":
             continue
         is_on = state.get(lid) == "on"
         want_on = not fp.get("off")
@@ -256,14 +326,16 @@ def _scene_distance(lights):
         # the on/off state actually mismatches.
         if fp_bri is None:
             if not skip_on and want_on != is_on:
-                dists.append(1.0)
+                off_pens.append(OFF_PENALTY)
             continue
-        # On/off state is a hard signal and dominates. Crucially, we do NOT
-        # read colour from an off light: many Hue lamps keep reporting their
-        # last color_temp_kelvin while off, which used to make an off light
-        # look almost like an on one (only the brightness differed).
+        # On/off state is a hard signal. Crucially, we do NOT read colour from an
+        # off light: many Hue lamps keep reporting their last color_temp_kelvin
+        # while off, which used to make an off light look almost like an on one
+        # (only the brightness differed). The penalty is a moderate OFF_PENALTY
+        # (not 1.0) and kept out of the blend max, so a lone off/unavailable lamp
+        # can't veto a room the other lamps clearly identify.
         if not skip_on and want_on != is_on:
-            dists.append(1.0)
+            off_pens.append(OFF_PENALTY)
             continue
         if not is_on:
             continue
@@ -278,8 +350,18 @@ def _scene_distance(lights):
         # brightness (e.g. 90 vs 143) collapsed to ~0.08 and could not be told
         # apart. sqrt stays sensitive at both ends: 7 vs 23 -> 0.13, 90 vs 143
         # -> 0.15, while high-end noise (240 vs 255) stays small.
+        # Colourfulness of the fingerprint colour (distance off the white/ct
+        # locus); drives both the deep-dim brightness cap and the colour weight.
+        cfl = _colorfulness(fp["xy"]) if fp.get("xy") else 0.0
         if "bri" not in dc:
-            d += abs(math.sqrt(fp_bri) - math.sqrt(cur_bri)) / 16.0
+            bt = abs(math.sqrt(fp_bri) - math.sqrt(cur_bri)) / 16.0
+            # Deep-dim cap: for a clearly-coloured lamp that has been dimmed BELOW
+            # its fingerprint brightness (the user turned a colour scene way down),
+            # cap the brightness penalty so the still-distinctive colour decides.
+            # Asymmetric (only cur < fp) so it never loosens matching otherwise.
+            if cfl > CF_THRESHOLD and cur_bri < fp_bri:
+                bt = min(bt, BRI_TERM_CAP)
+            d += bt
             contributed = True
         # Colour weight scales the colour term by how bright the lamp is, so a
         # dim lamp (whose colour is barely visible) is told apart mainly by
@@ -323,14 +405,17 @@ def _scene_distance(lights):
                 d += min(base * (abs(live["ct"] - fp["ct"]) / 1200.0), CT_TERM_CAP)
                 contributed = True
             elif axis == "xy":
-                cw = math.sqrt(base)
+                # Weight = max(saturation, sqrt(brightness)): a saturated colour
+                # stays reliable when dim (so keep its weight up), a near-white
+                # tint falls back to the brightness weight (its xy is noisy dim).
+                cw = max(_saturation(fp["xy"]), math.sqrt(base))
                 cur = live["xy"]
                 dx = cur[0] - fp["xy"][0]
                 dy = cur[1] - fp["xy"][1]
                 d += cw * (((dx * dx + dy * dy) ** 0.5) / 0.25)
                 contributed = True
             elif axis == "hs":
-                cw = math.sqrt(base)
+                cw = max(min(fp["hs"][1] / 100.0, 1.0), math.sqrt(base))
                 cur = live["hs"]
                 dh = abs(cur[0] - fp["hs"][0])
                 dh = min(dh, 360 - dh)
@@ -339,14 +424,18 @@ def _scene_distance(lights):
         if not contributed:
             continue
         dists.append(d)
-    if not dists:
+    all_d = dists + off_pens
+    if not all_d:
         return None
-    mean = sum(dists) / len(dists)
+    mean = sum(all_d) / len(all_d)
     if BLEND_WEIGHT <= 0.0:
         return mean
     # Blend in the single largest per-lamp distance so a pair of scenes that
-    # differ in only ONE lamp (which the mean dilutes) still separates.
-    return (1.0 - BLEND_WEIGHT) * mean + BLEND_WEIGHT * max(dists)
+    # differ in only ONE lamp (which the mean dilutes) still separates. On/off
+    # penalties are deliberately excluded from the max: a lone off/unavailable
+    # lamp still counts in the mean but can't dominate via the max term.
+    max_pool = dists if dists else all_d
+    return (1.0 - BLEND_WEIGHT) * mean + BLEND_WEIGHT * max(max_pool)
 
 
 def _ranked(scenes):

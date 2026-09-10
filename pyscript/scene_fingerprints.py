@@ -353,7 +353,7 @@ _CALIB_WORKERS = []
 
 
 @service
-def scene_fingerprint_calibrate(room=None, settle=4, contrast=False, parallel=1):
+def scene_fingerprint_calibrate(room=None, settle=4, contrast=True, parallel=1):
     """yaml
 name: Calibrate scene fingerprints
 fields:
@@ -365,10 +365,11 @@ fields:
       lamp's colour is still drifting when recorded)
     example: 4
   contrast:
-    description: Thorough mode -- run each scene twice from opposite states and
-      detect, per attribute, what the scene does NOT control (marked don't-care
-      and ignored when matching). ~2x the flashing.
-    example: false
+    description: Thorough mode (default ON) -- run each scene twice from opposite
+      states and detect, per attribute, what the scene does NOT control (marked
+      don't-care and ignored when matching). ~2x the flashing. Turn off only for
+      a quick re-capture of scenes you know control every lamp.
+    example: true
   parallel:
     description: How many rooms to calibrate at once (whole-home only). Commands
       are rate-limited to protect the bridge, so this mainly overlaps the settle
@@ -393,7 +394,7 @@ description: Abort the background calibration. Workers finish the current scene,
     log.warning("CALIB: abort requested")
 
 
-def _calibrate_run(room=None, settle=4, contrast=False, parallel=1):
+def _calibrate_run(room=None, settle=4, contrast=True, parallel=1):
     task.unique("scene_calibrate")
     _cmd_busy[0] = False
     _writing[0] = False
