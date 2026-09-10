@@ -13,7 +13,7 @@ import math
 import time
 from homeassistant.util import slugify
 
-VERSION = "v15"  # bumped on every change; printed in the log to confirm what runs
+VERSION = "v16"  # bumped on every change; printed in the log to confirm what runs
 
 # All persistent data for this integration lives in one folder so it is easy to
 # find and back up (was scattered as scene_*.* in /config root). The old paths
@@ -22,6 +22,9 @@ VERSION = "v15"  # bumped on every change; printed in the log to confirm what ru
 DATA_DIR = "/config/hue_scenes"
 FINGERPRINT_FILE = DATA_DIR + "/fingerprints.json"
 _LEGACY_FINGERPRINT_FILE = "/config/scene_fingerprints.json"
+# Optional overrides for the tunable scoring parameters, written by
+# tools/tune_matcher.py. Absent -> the code defaults below are used.
+PARAMS_FILE = DATA_DIR + "/params.json"
 DYNAMIC_SENSOR = "sensor.dynamische_szenen"
 TRACKER = "pyscript.scene_tracker"
 
@@ -272,8 +275,45 @@ def _wait_settled(members, settle, max_wait=45.0):
         prev = snap
 
 
+def _load_params():
+    # Apply tunable-parameter overrides from params.json (written by the offline
+    # tuner). Only known keys are honoured; everything else keeps its code
+    # default, so a partial or stale file can't break the matcher. Explicit
+    # `global` (not globals()[k]=) so it reliably rebinds the module constants
+    # the scoring functions read.
+    global CT_TERM_CAP, BLEND_WEIGHT, KEEP_MARGIN, ACCEPT, CLEAR
+    global OFF_PENALTY, BRI_TERM_CAP, CF_THRESHOLD, CONFIRM_COUNT, SETTLE_MAX
+    over = task.executor(_read_json, PARAMS_FILE)
+    if not over:
+        return
+    applied = {}
+    if "CT_TERM_CAP" in over:
+        CT_TERM_CAP = over["CT_TERM_CAP"]; applied["CT_TERM_CAP"] = CT_TERM_CAP
+    if "BLEND_WEIGHT" in over:
+        BLEND_WEIGHT = over["BLEND_WEIGHT"]; applied["BLEND_WEIGHT"] = BLEND_WEIGHT
+    if "KEEP_MARGIN" in over:
+        KEEP_MARGIN = over["KEEP_MARGIN"]; applied["KEEP_MARGIN"] = KEEP_MARGIN
+    if "ACCEPT" in over:
+        ACCEPT = over["ACCEPT"]; applied["ACCEPT"] = ACCEPT
+    if "CLEAR" in over:
+        CLEAR = over["CLEAR"]; applied["CLEAR"] = CLEAR
+    if "OFF_PENALTY" in over:
+        OFF_PENALTY = over["OFF_PENALTY"]; applied["OFF_PENALTY"] = OFF_PENALTY
+    if "BRI_TERM_CAP" in over:
+        BRI_TERM_CAP = over["BRI_TERM_CAP"]; applied["BRI_TERM_CAP"] = BRI_TERM_CAP
+    if "CF_THRESHOLD" in over:
+        CF_THRESHOLD = over["CF_THRESHOLD"]; applied["CF_THRESHOLD"] = CF_THRESHOLD
+    if "CONFIRM_COUNT" in over:
+        CONFIRM_COUNT = over["CONFIRM_COUNT"]; applied["CONFIRM_COUNT"] = CONFIRM_COUNT
+    if "SETTLE_MAX" in over:
+        SETTLE_MAX = over["SETTLE_MAX"]; applied["SETTLE_MAX"] = SETTLE_MAX
+    if applied:
+        log.warning(f"Matcher {VERSION}: params.json overrides {applied}")
+
+
 def _load():
     global FP
+    _load_params()
     FP = task.executor(_read_json, FINGERPRINT_FILE)
     if not FP:
         # fall back to the pre-v16 location (/config/scene_fingerprints.json)

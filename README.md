@@ -188,6 +188,16 @@ read-only and restores nothing (the next activation resets the lights).
 > is created automatically; an existing `/config/scene_fingerprints.json` from an
 > older install is read as a fallback until the next calibration migrates it.
 
+## Tuning the matcher (optional)
+
+The scoring parameters have sensible defaults baked into `scene_match.py`. To
+tune them to *your* home on measured data, run a full `scene_diagnose`, copy the
+report and `fingerprints.json` to any machine with Python 3, and use
+[`tools/tune_matcher.py`](tools/README.md): it replays the matcher over every
+recorded transition, grid-searches the parameters, and can write a `params.json`.
+Drop that file at **`/config/hue_scenes/params.json`** and the matcher loads it
+at startup (logging which values it overrode); anything absent keeps its default.
+
 ## Per-room setup
 
 For each room:
