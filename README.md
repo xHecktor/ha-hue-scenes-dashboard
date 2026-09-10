@@ -170,7 +170,7 @@ runs, the **full report is also written to `/config/hue_scenes/diagnose_report.t
 `pyscript.scene_dim_drift` measures how well detection survives when you turn a
 **colourful** scene far down. It auto-selects the most colourful scenes per room,
 activates each, then steps every lamp through decreasing brightness levels
-(100 → 50 → 25 → 12 → 6 %), recording per lamp how the reported colour drifts and
+(100 → 50 → 25 → 12 → 6 → 3 → 1 %), recording per lamp how the reported colour drifts and
 at which level the live matcher stops recognising the scene:
 
 ```yaml

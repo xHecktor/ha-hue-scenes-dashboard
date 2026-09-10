@@ -591,7 +591,7 @@ def _diagnose_run(room=None, settle=4, mode="full"):
 # ---------------------------------------------------------------------------
 
 _DRIFT_TASK = None
-_DIM_LEVELS = (100, 50, 25, 12, 6)   # percent of each lamp's own scene brightness
+_DIM_LEVELS = (100, 50, 25, 12, 6, 3, 1)   # percent of each lamp's own scene brightness
 
 # Planckian (white/colour-temperature) locus in xy -- distance off it = "how
 # colourful" (0 for any white/warm tint, large for a saturated colour).
@@ -873,24 +873,24 @@ def _dim_drift_run(room=None, scenes=None, levels=None, settle=4, top=3):
                     _wait_hold(labeled, settle)
                 det = _settle_verdict(rname)
                 dshort = det.split(".")[-1] if det else "-"
-                # Largest per-lamp colour drift at this level. Hue holds xy
-                # constant across brightness, so this is normally ~0; only lamps
-                # that actually moved are logged (keeps the report readable).
+                # Full per-lamp trajectory at this level: every on-lamp's live
+                # brightness, colour and its drift from the 100 % reference. Each
+                # line is written and flushed on its own (crash-safe). Hue holds
+                # xy constant across brightness, so Δ is normally ~0.
                 maxdrift = 0.0
                 for lname, lid in labeled:
                     r0 = ref.get(lname) or {}
-                    if not r0.get("on") or not r0.get("xy"):
+                    if not r0.get("on"):
                         continue
                     cur = _lamp_state(lid)
                     dxy = _xy_dist(cur.get("xy"), r0.get("xy"))
-                    if dxy is None:
-                        continue
-                    if dxy > maxdrift:
+                    if dxy is not None and dxy > maxdrift:
                         maxdrift = dxy
-                    if dxy > 0.01:
-                        _write_report_line(
-                            DRIFT_REPORT_FILE,
-                            f"     drift {lname:18s} {lvl:3d}%: xy{cur.get('xy')} Δ{dxy:.3f}")
+                    drift = f"Δ{dxy:.3f}" if dxy is not None else "Δ-"
+                    _write_report_line(
+                        DRIFT_REPORT_FILE,
+                        f"     {lname:20s} {lvl:3d}%: b{cur.get('b')} "
+                        f"xy{cur.get('xy')} ct{cur.get('ct')} {drift}")
                 verdicts.append(f"{lvl}%={dshort} maxΔ{maxdrift:.2f}")
                 if first_break is None and dshort != sshort:
                     first_break = lvl
