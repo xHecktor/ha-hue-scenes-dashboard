@@ -619,6 +619,61 @@ def _xy_dist(a, b):
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
+def _scene_feature(entry):
+    # (colourfulness, mean_hue_deg or None) describing where a scene sits in
+    # colour space. Hue is the saturation-weighted circular mean of the on-lamps,
+    # so two scenes of similar saturation but different hue (a blue vs an orange)
+    # read as different -- used to spread the drift probe across the palette.
+    import math
+    cf = _scene_colorfulness(entry)
+    sx = sy = 0.0
+    for rec in entry.values():
+        if not isinstance(rec, dict) or rec.get("off") or not rec.get("hs"):
+            continue
+        h, s = rec["hs"][0], rec["hs"][1]
+        w = s / 100.0
+        sx += w * math.cos(math.radians(h))
+        sy += w * math.sin(math.radians(h))
+    hue = math.degrees(math.atan2(sy, sx)) % 360 if (sx or sy) else None
+    return cf, hue
+
+
+def _diverse_pick(cands, k):
+    # Farthest-point sampling over (colourfulness, hue): start from the most
+    # colourful scene, then repeatedly add the candidate most different from the
+    # ones already chosen, so the probe covers saturated AND borderline/pastel
+    # scenes of different hues rather than a cluster of near-identical bright ones.
+    import math
+
+    def dist(a, b):
+        cfa, ha = a
+        cfb, hb = b
+        d = abs(cfa - cfb) / 0.30
+        if ha is None or hb is None:
+            d += 0.5
+        else:
+            dh = abs(ha - hb)
+            dh = min(dh, 360 - dh)
+            d += dh / 180.0
+        return d
+
+    if len(cands) <= k:
+        return list(cands)
+    cands = sorted(cands, key=lambda c: c[0], reverse=True)  # feature cf is c[0]
+    chosen = [cands[0]]
+    rest = list(cands[1:])
+    while len(chosen) < k and rest:
+        best_i = 0
+        best_d = -1.0
+        for i, c in enumerate(rest):
+            dmin = min(dist(c[:2], ch[:2]) for ch in chosen)
+            if dmin > best_d:
+                best_d = dmin
+                best_i = i
+        chosen.append(rest.pop(best_i))
+    return chosen
+
+
 def _wait_hold(labeled, settle, max_wait=20.0):
     # Wait >= settle seconds AND until two 1 s reads are identical, so drift is
     # measured only once the lamps have stopped moving at the new brightness.
@@ -634,14 +689,15 @@ def _wait_hold(labeled, settle, max_wait=20.0):
 
 
 @service
-def scene_dim_drift(room=None, scenes=None, levels=None, settle=4, top=3):
+def scene_dim_drift(room=None, scenes=None, levels=None, settle=4, top=4):
     """yaml
 name: Diagnose dim drift (colour vs brightness)
-description: For the most colourful scenes (auto-selected), activate the scene
-  then step every lamp down through several brightness levels, recording how
-  each lamp's reported colour drifts and at which level the live matcher stops
-  recognising the scene. Writes /config/hue_scenes/dim_drift_report.txt. Runs in
-  the background; read-only (restores nothing -- next activation resets state).
+description: For a diverse set of colourful scenes (auto-selected to span both
+  saturation and hue -- deeply-saturated AND borderline/pastel), activate the
+  scene then step every lamp down through several brightness levels, recording
+  how each lamp's reported colour drifts and at which level the live matcher
+  stops recognising the scene. Writes /config/hue_scenes/dim_drift_report.txt.
+  Runs in the background; read-only (restores nothing -- next activation resets).
 fields:
   room:
     description: Only this room (group_name). Empty = whole home.
@@ -650,8 +706,8 @@ fields:
     description: Comma-separated scene slugs to force (overrides auto-select).
     example: wohnzimmer_rio,wohnzimmer_blue_planet
   top:
-    description: How many of the most colourful scenes per room to probe.
-    example: 3
+    description: How many scenes per room to probe (spread across saturation/hue).
+    example: 4
   settle:
     description: Seconds to hold each brightness level before measuring.
     example: 4
@@ -696,22 +752,24 @@ def _dim_drift_run(room=None, scenes=None, levels=None, settle=4, top=3):
         if room and slugify(rname) != slugify(room):
             continue
 
-        # choose scenes: forced, else the `top` most colourful (skip warm/white)
-        ranked = []
-        for full, entry in entries.items():
-            sshort = full.split(".")[-1]
-            if _excluded(full):
-                continue
-            if forced is not None:
-                if sshort in forced:
-                    ranked.append((1.0, full, entry))
-                continue
-            cf = _scene_colorfulness(entry)
-            if cf >= 0.08:
-                ranked.append((cf, full, entry))
-        ranked.sort(reverse=True)
-        if forced is None:
-            ranked = ranked[:int(top)]
+        # choose scenes: forced, else a DIVERSE set spread across the palette
+        # (saturation AND hue), so the probe covers both deeply-saturated scenes
+        # (which survive dimming) and the borderline/pastel ones (which break) --
+        # not just a cluster of the brightest. Pure white/warm scenes (cf < 0.05)
+        # are skipped: their drift is the uninteresting collapse target.
+        if forced is not None:
+            ranked = [(1.0, full, entry) for full, entry in entries.items()
+                      if full.split(".")[-1] in forced and not _excluded(full)]
+        else:
+            cands = []
+            for full, entry in entries.items():
+                if _excluded(full):
+                    continue
+                cf, hue = _scene_feature(entry)
+                if cf >= 0.05:
+                    cands.append((cf, hue, full, entry))
+            picked = _diverse_pick(cands, int(top))
+            ranked = [(c[0], c[2], c[3]) for c in picked]
         if not ranked:
             continue
 
