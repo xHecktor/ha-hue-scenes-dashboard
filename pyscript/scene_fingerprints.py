@@ -31,8 +31,12 @@ _total = [0]            # total scenes to do this run (for the X/N progress coun
 _abort = [False]        # set by the stop service; workers check and bail out
 
 
+# File I/O runs in a worker thread via task.executor -- doing open()/write()
+# inline would block Home Assistant's event loop (HA now warns/errors on that).
+# The compiled *_io workers do the blocking work; the wrappers are what the rest
+# of the module calls.
 @pyscript_compile
-def _clog_init(path, room, contrast, parallel):
+def _clog_init_io(path, room, contrast, parallel):
     import datetime, os
     try:
         d = os.path.dirname(path)
@@ -43,13 +47,16 @@ def _clog_init(path, room, contrast, parallel):
             f.write(f"room={room or 'all'}  contrast={contrast}  parallel={parallel}\n\n")
             f.flush()
         return True
-    except Exception as e:
-        log.error(f"CALIB: cannot init log {path}: {e}")
+    except Exception:
         return False
 
 
+def _clog_init(path, room, contrast, parallel):
+    return task.executor(_clog_init_io, path, room, contrast, parallel)
+
+
 @pyscript_compile
-def _clog(path, line):
+def _clog_io(path, line):
     # Append one line and flush immediately, so nothing is lost on a crash.
     try:
         with open(path, "a", encoding="utf-8") as f:
@@ -57,6 +64,10 @@ def _clog(path, line):
             f.flush()
     except Exception:
         pass
+
+
+def _clog(path, line):
+    return task.executor(_clog_io, path, line)
 
 
 def _group_for(room, lights_all):

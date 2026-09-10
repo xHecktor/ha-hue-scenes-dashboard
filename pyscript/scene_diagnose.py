@@ -26,7 +26,7 @@ import json
 from homeassistant.util import slugify
 
 
-VERSION = "d10"
+VERSION = "d11"
 
 # Strong reference to the background task so it isn't garbage-collected
 # (and cancelled) the moment the service function returns.
@@ -52,20 +52,27 @@ def _read_json(path):
         return json.load(f)
 
 
+# File I/O helpers. The actual open()/write() runs in a worker thread via
+# task.executor -- doing it inline would block Home Assistant's event loop (HA
+# now warns/errors on that). The compiled *_io workers do the blocking work; the
+# thin wrappers below are what the rest of the module calls.
 @pyscript_compile
-def _write_report_line(path, line):
+def _write_report_line_io(path, line):
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.write(line + "\n")
             f.flush()
         return True
-    except Exception as e:
-        log.error(f"DIAGNOSE: report write failed: {e}")
+    except Exception:
         return False
 
 
+def _write_report_line(path, line):
+    return task.executor(_write_report_line_io, path, line)
+
+
 @pyscript_compile
-def _init_report(path, room, settle, mode):
+def _init_report_io(path, version, room, settle, mode):
     import datetime, os
     try:
         d = os.path.dirname(path)
@@ -73,14 +80,16 @@ def _init_report(path, room, settle, mode):
             os.makedirs(d, exist_ok=True)
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         with open(path, "w", encoding="utf-8") as f:
-            f.write(f"scene_diagnose {VERSION}  {now}\n")
-            f.write(f"room={room or 'all'}  settle={settle}s  mode={mode}\n")
-            f.write("\n")
+            f.write(f"scene_diagnose {version}  {now}\n")
+            f.write(f"room={room or 'all'}  settle={settle}s  mode={mode}\n\n")
             f.flush()
         return True
-    except Exception as e:
-        log.error(f"DIAGNOSE: cannot initialize report {path}: {e}")
+    except Exception:
         return False
+
+
+def _init_report(path, room, settle, mode):
+    return task.executor(_init_report_io, path, VERSION, room, settle, mode)
 
 
 def _group_for(room, lights_all):
