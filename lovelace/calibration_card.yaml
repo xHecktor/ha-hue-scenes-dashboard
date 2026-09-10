@@ -36,3 +36,11 @@ footer:
           text: >-
             Kalibrierung starten? Die Lampen flackern kurz durch die Szenen
             (im Kontrast-Modus etwa doppelt so lange).
+    # Abort a running calibration. Workers finish the current scene, save what
+    # they have, and stop; the status line shows ABGEBROCHEN / FERTIG when done.
+    - entity: pyscript.scene_fingerprint_calibrate_stop
+      name: Stop
+      icon: mdi:stop
+      tap_action:
+        action: perform-action
+        perform_action: pyscript.scene_fingerprint_calibrate_stop

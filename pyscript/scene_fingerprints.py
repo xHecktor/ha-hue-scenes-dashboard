@@ -19,11 +19,12 @@ CALIB_LOG = "/config/scene_calibrate_log.txt"
 # Hue-bridge protection: every scene/light command from every worker passes
 # through one gate that spaces commands by at least this many seconds, so
 # running several rooms in parallel can never flood the bridge or outrun the
-# Zigbee radio / HA state updates.
-MIN_CMD_INTERVAL = 0.25
+# Zigbee radio / HA state updates. 0.5 s = at most 2 commands/second total.
+MIN_CMD_INTERVAL = 0.5
 _cmd_busy = [False]     # list holders = module-mutable without `global`
 _writing = [False]      # serialises DB file writes across parallel workers
 _scene_count = [0]      # scenes finished (for the dashboard status)
+_abort = [False]        # set by the stop service; workers check and bail out
 
 
 @pyscript_compile
@@ -169,6 +170,8 @@ def _wait_settled(members, settle, max_wait=45.0):
     prev = None
     waited = 0.0
     while waited < max_wait:
+        if _abort[0]:
+            return
         task.sleep(1.0)
         waited += 1.0
         if int(waited) % 3 == 0:
@@ -306,6 +309,9 @@ def _calibrate_room(rname, group, scene_list, settle, contrast, db):
     db[rname] = {}
     _clog(CALIB_LOG, f"[{rname}] start  group={group}  {len(scene_list)} scenes")
     for eid, name in scene_list:
+        if _abort[0]:
+            _clog(CALIB_LOG, f"[{rname}] ABORTED")
+            break
         try:
             entry = _calibrate_scene(group, members, eid, settle, contrast)
             db[rname][eid] = entry
@@ -331,7 +337,7 @@ def _calibrate_room(rname, group, scene_list, settle, contrast, db):
 
 
 def _calib_worker(queue, rooms, settle, contrast, db, done):
-    while queue:
+    while queue and not _abort[0]:
         rname = queue.pop()
         try:
             info = rooms[rname]
@@ -375,11 +381,24 @@ fields:
                 f"parallel={parallel}) -> log {CALIB_LOG}")
 
 
+@service
+def scene_fingerprint_calibrate_stop(**kwargs):
+    """yaml
+name: Stop a running calibration
+description: Abort the background calibration. Workers finish the current scene,
+  write what they have, and stop. The dashboard status shows ABGEBROCHEN.
+"""
+    _abort[0] = True
+    _status("Wird abgebrochen …", True)
+    log.warning("CALIB: abort requested")
+
+
 def _calibrate_run(room=None, settle=4, contrast=False, parallel=1):
     task.unique("scene_calibrate")
     _cmd_busy[0] = False
     _writing[0] = False
     _scene_count[0] = 0
+    _abort[0] = False
     _clog_init(CALIB_LOG, room, contrast, parallel)
     _status(f"Kalibriere {room or 'alle Räume'} …", True)
     log.warning(f"CALIB worker started (room={room or 'all'}, contrast={contrast})")
@@ -423,7 +442,7 @@ def _calibrate_run(room=None, settle=4, contrast=False, parallel=1):
         nworkers = max(1, len(queue))
 
     if nworkers == 1:
-        while queue:
+        while queue and not _abort[0]:
             rn = queue.pop()
             info = rooms[rn]
             _calibrate_room(rn, info["group"], info["scenes"], settle, contrast, db)
@@ -438,6 +457,8 @@ def _calibrate_run(room=None, settle=4, contrast=False, parallel=1):
             task.sleep(0.5)
 
     _save_db(db)
-    _status(f"Fertig – {_scene_count[0]} Szenen ({room or 'alle'})", False)
-    _clog(CALIB_LOG, f"\nDONE: {_scene_count[0]} scenes")
-    log.warning(f"CALIB done, {_scene_count[0]} scenes")
+    tag = "ABGEBROCHEN" if _abort[0] else "FERTIG"
+    _status(f"{tag} – {_scene_count[0]}/{total} Szenen ({room or 'alle'})", False)
+    _clog(CALIB_LOG, f"\n{tag}: {_scene_count[0]}/{total} scenes")
+    log.warning(f"CALIB {tag}: {_scene_count[0]}/{total} scenes -> DB saved")
+    _abort[0] = False
