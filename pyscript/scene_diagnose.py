@@ -48,8 +48,11 @@ def _read_json(path):
     import os
     if not os.path.exists(path):
         return {}
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 
 # File I/O helpers. The actual open()/write() runs in a worker thread via
@@ -442,8 +445,11 @@ def _diagnose_run(room=None, settle=4, mode="full"):
         log.error(f"DIAGNOSE: could not read fingerprint file: {e}")
         return
     if not db:
-        log.error("DIAGNOSE: fingerprint database empty")
-        _write_report_line(REPORT_FILE, "ERROR: fingerprint database empty")
+        msg = (f"ERROR: fingerprint database empty -- checked {FINGERPRINT_FILE} "
+               f"and {_LEGACY_FINGERPRINT_FILE}. Copy your fingerprints there "
+               f"(exact filename fingerprints.json) or run scene_fingerprint_calibrate first.")
+        log.error("DIAGNOSE: " + msg)
+        _write_report_line(REPORT_FILE, msg)
         return
 
     lights_all = state.names("light")
@@ -745,7 +751,11 @@ def _dim_drift_run(room=None, scenes=None, levels=None, settle=4, top=3):
     if not db:
         db = task.executor(_read_json, _LEGACY_FINGERPRINT_FILE)
     if not db:
-        _write_report_line(DRIFT_REPORT_FILE, "ERROR: fingerprint database empty")
+        msg = (f"ERROR: fingerprint database empty -- checked {FINGERPRINT_FILE} "
+               f"and {_LEGACY_FINGERPRINT_FILE}. Copy your fingerprints there "
+               f"(exact filename fingerprints.json) or run scene_fingerprint_calibrate first.")
+        log.error("DIM-DRIFT: " + msg)
+        _write_report_line(DRIFT_REPORT_FILE, msg)
         return
 
     lights_all = state.names("light")
