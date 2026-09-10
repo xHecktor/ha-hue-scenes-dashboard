@@ -887,10 +887,11 @@ def _dim_drift_run(room=None, scenes=None, levels=None, settle=4, top=3):
                     if dxy is not None and dxy > maxdrift:
                         maxdrift = dxy
                     drift = f"Δ{dxy:.3f}" if dxy is not None else "Δ-"
+                    # full per-lamp state (b, cm, ct, xy, hs, rgb, eff, dyn, mode)
+                    # -- same fields as the main diagnose, no info dropped
                     _write_report_line(
                         DRIFT_REPORT_FILE,
-                        f"     {lname:20s} {lvl:3d}%: b{cur.get('b')} "
-                        f"xy{cur.get('xy')} ct{cur.get('ct')} {drift}")
+                        f"     {lname:20s} {lvl:3d}%: {_fmt_lamp(cur)} {drift}")
                 verdicts.append(f"{lvl}%={dshort} maxΔ{maxdrift:.2f}")
                 if first_break is None and dshort != sshort:
                     first_break = lvl
