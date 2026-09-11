@@ -13,7 +13,7 @@ import math
 import time
 from homeassistant.util import slugify
 
-VERSION = "v17"  # bumped on every change; printed in the log to confirm what runs
+VERSION = "v18"  # bumped on every change; printed in the log to confirm what runs
 
 # All persistent data for this integration lives in one folder so it is easy to
 # find and back up (was scattered as scene_*.* in /config root). The old paths
@@ -95,6 +95,11 @@ OFF_PENALTY = 0.5
 # two scenes identical in colour+brightness but differing only in a lamp's
 # effect (Stille Nacht's sparkling tree vs Hell) are separated by this.
 EFFECT_PENALTY = 1.0
+# Multiplier on an effect-MATCHED lamp's colour+brightness term. 1.0 = no change
+# (default; the measured data shows HA reports a stable base colour for effect
+# lamps). Lower it (e.g. 0.3) only if an effect scene ever flickers in detection
+# -- then colour/brightness are trusted less and the effect match carries.
+EFFECT_COLOR_WEIGHT = 1.0
 # Cap on a single lamp's colour-temperature distance term. A laggy Hue lamp can
 # keep reporting the PREVIOUS scene's ct for many seconds after a change (its
 # brightness updates at once), and an uncapped ct term then dominates and picks
@@ -288,13 +293,15 @@ def _load_params():
     # the scoring functions read.
     global CT_TERM_CAP, BLEND_WEIGHT, KEEP_MARGIN, ACCEPT, CLEAR
     global OFF_PENALTY, BRI_TERM_CAP, CF_THRESHOLD, CONFIRM_COUNT, SETTLE_MAX
-    global EFFECT_PENALTY
+    global EFFECT_PENALTY, EFFECT_COLOR_WEIGHT
     over = task.executor(_read_json, PARAMS_FILE)
     if not over:
         return
     applied = {}
     if "EFFECT_PENALTY" in over:
         EFFECT_PENALTY = over["EFFECT_PENALTY"]; applied["EFFECT_PENALTY"] = EFFECT_PENALTY
+    if "EFFECT_COLOR_WEIGHT" in over:
+        EFFECT_COLOR_WEIGHT = over["EFFECT_COLOR_WEIGHT"]; applied["EFFECT_COLOR_WEIGHT"] = EFFECT_COLOR_WEIGHT
     if "CT_TERM_CAP" in over:
         CT_TERM_CAP = over["CT_TERM_CAP"]; applied["CT_TERM_CAP"] = CT_TERM_CAP
     if "BLEND_WEIGHT" in over:
@@ -502,9 +509,20 @@ def _scene_distance(lights):
             fp_eff = fp.get("effect")
             live_eff = attrs.get("effect")
             live_eff = live_eff if (live_eff and live_eff != "off") else None
-            if (fp_eff or live_eff) and fp_eff != live_eff:
-                d += EFFECT_PENALTY
-                contributed = True
+            if fp_eff or live_eff:
+                if fp_eff != live_eff:
+                    d += EFFECT_PENALTY
+                    contributed = True
+                elif EFFECT_COLOR_WEIGHT != 1.0:
+                    # Effect MATCHES. A running effect can animate the lamp's
+                    # colour/brightness, so on some lamps/firmware those live
+                    # values are unreliable -- optionally down-weight this lamp's
+                    # colour+brightness term and lean on the (stable) effect
+                    # match instead. Default 1.0 = no change: in the measured
+                    # data HA reports a stable base colour for effect lamps, so
+                    # this is only a safety valve if you ever see an effect scene
+                    # flicker in detection.
+                    d *= EFFECT_COLOR_WEIGHT
         if not contributed:
             continue
         dists.append(d)

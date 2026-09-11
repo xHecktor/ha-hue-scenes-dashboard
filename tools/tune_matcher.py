@@ -43,6 +43,7 @@ DEFAULTS = {
     "BRI_TERM_CAP": 0.15,
     "CF_THRESHOLD": 0.10,
     "EFFECT_PENALTY": 1.0,
+    "EFFECT_COLOR_WEIGHT": 1.0,
 }
 # Grid search space (only the parameters worth sweeping on detection accuracy).
 GRID = {
@@ -164,9 +165,12 @@ def scene_distance(fp_lights, live, p):
             fp_eff = fp.get("effect")
             live_eff = a.get("eff")
             live_eff = live_eff if (live_eff and live_eff != "off") else None
-            if (fp_eff or live_eff) and fp_eff != live_eff:
-                d += p["EFFECT_PENALTY"]
-                contributed = True
+            if fp_eff or live_eff:
+                if fp_eff != live_eff:
+                    d += p["EFFECT_PENALTY"]
+                    contributed = True
+                elif p["EFFECT_COLOR_WEIGHT"] != 1.0:
+                    d *= p["EFFECT_COLOR_WEIGHT"]
         if not contributed:
             continue
         dists.append(d)
