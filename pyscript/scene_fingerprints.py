@@ -153,12 +153,27 @@ def _read_json(path):
 
 @pyscript_compile
 def _write_json(path, data):
-    import json, os
+    # Atomic write (temp file + fsync + os.replace). A plain open("w") truncates
+    # first, so a concurrent reader (the matcher) or the other writer (scene_learn
+    # in scene_match) could see a torn, half-written file -> "Extra data" JSON
+    # corruption. os.replace is atomic on POSIX. Keep in sync with scene_match.py.
+    import json, os, tempfile
     d = os.path.dirname(path)
     if d:
         os.makedirs(d, exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    fd, tmp = tempfile.mkstemp(dir=d or ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+        raise
 
 
 def _status(label, running):
@@ -788,10 +803,16 @@ def _calibrate_run(room=None, settle=10, contrast=True, parallel=1):
     _status(_running_label(), True)
     log.warning(f"CALIB worker started (scope={scope_label}, contrast={contrast})")
 
-    db = task.executor(_read_json, FINGERPRINT_FILE)
-    if not db:
-        # migrate: seed from the pre-v16 location if the new file isn't there yet
-        db = task.executor(_read_json, _LEGACY_FINGERPRINT_FILE)
+    # Tolerate a corrupt existing DB: a re-calibration is exactly how you recover
+    # from it, so never let an unreadable file abort the run.
+    try:
+        db = task.executor(_read_json, FINGERPRINT_FILE)
+        if not db:
+            # migrate: seed from the pre-v16 location if the new file isn't there yet
+            db = task.executor(_read_json, _LEGACY_FINGERPRINT_FILE)
+    except Exception as e:
+        log.warning(f"CALIB: existing DB unreadable ({e}); starting fresh")
+        db = {}
 
     lights_all = state.names("light")
     rooms = _group_scenes(room, lights_all, log_skips=True)

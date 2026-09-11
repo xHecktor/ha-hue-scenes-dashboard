@@ -145,6 +145,7 @@ EXCLUDE_SUFFIXES = ("_naturliches_licht",)  # adaptive scenes to ignore
 FP = {}
 LOCK = {}
 PENDING = {}  # room -> (candidate_scene, consecutive_count) for the switch debounce
+_DB_BROKEN = [False]  # True when the fingerprint file is unreadable -> never write
 
 
 @pyscript_compile
@@ -158,12 +159,29 @@ def _read_json(path):
 
 @pyscript_compile
 def _write_json(path, data):
-    import json, os
+    # Atomic write: dump to a temp file in the same dir, fsync, then os.replace.
+    # A plain open("w") truncates first and a concurrent reader (the matcher) or
+    # a second writer (calibration vs. scene_learn both write this file) could
+    # see a half-written, torn file -> "Extra data" JSON corruption. os.replace
+    # is atomic on POSIX, so readers always see either the old or the new whole
+    # file, never a mix.
+    import json, os, tempfile
     d = os.path.dirname(path)
     if d:
         os.makedirs(d, exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    fd, tmp = tempfile.mkstemp(dir=d or ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except Exception:
+            pass
+        raise
 
 
 def _fp_light(ml, is_on):
@@ -344,10 +362,14 @@ def _load():
             FP = task.executor(_read_json, _LEGACY_FINGERPRINT_FILE)
     except Exception as e:
         # A corrupt fingerprint DB must not crash-loop the matcher either; log
-        # clearly which file to check and carry on with what we had.
+        # clearly which file to check and carry on with what we had. Mark the DB
+        # broken so scene_learn won't overwrite the file with a partial FP (which
+        # would turn a fixable corrupt file into permanent data loss).
+        _DB_BROKEN[0] = True
         log.error(f"Matcher {VERSION}: {FINGERPRINT_FILE} unreadable ({e}); "
                   f"detection paused until the file is valid JSON.")
         return
+    _DB_BROKEN[0] = False
     total = 0
     for v in FP.values():
         total += len(v)
@@ -702,6 +724,12 @@ def scene_learn(scene=None, settle=4, **kwargs):
         return
     if not FP:
         _load()
+    if _DB_BROKEN[0]:
+        # DB file is corrupt/unreadable -- do NOT write, or we'd overwrite the
+        # whole database with just this one freshly-learned scene.
+        log.warning(f"Learn skipped for {scene}: fingerprint DB is unreadable; "
+                    f"fix {FINGERPRINT_FILE} first.")
+        return
     attrs = state.getattr(scene) or {}
     room = attrs.get("group_name")
     if not room:
