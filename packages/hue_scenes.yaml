@@ -333,7 +333,10 @@ script:
           sel: "{{ states('input_select.calibrate_room') }}"
       - action: pyscript.scene_fingerprint_calibrate
         data:
-          room: "{{ '' if sel in ['Alle Räume', '…'] else sel }}"
+          # Pass the selection verbatim; pyscript (_resolve_scope) maps
+          # "Alle Räume + Zonen" -> everything, "── Räume ──"/"── Zonen ──" ->
+          # all rooms / all zones, and a name -> just that area.
+          room: "{{ sel }}"
           settle: "{{ states('input_number.calibrate_settle') | int(10) }}"
           contrast: "{{ is_state('input_boolean.calibrate_contrast', 'on') }}"
           parallel: "{{ states('input_number.calibrate_parallel') | int(1) }}"
@@ -344,7 +347,11 @@ script:
     alias: "Diagnose selected room"
     variables:
       sel: "{{ states('input_select.calibrate_room') }}"
-      room: "{{ '' if sel in ['Alle Räume', '…'] else sel }}"
+      # Diagnose takes a single area or whole-home; treat the "all" entry and the
+      # group headers as whole-home (headers are a calibration-only shortcut).
+      room: >-
+        {{ '' if (sel in ['Alle Räume', 'Alle Räume + Zonen', '…']
+                  or sel.startswith('──')) else sel }}
       dtype: "{{ states('input_select.hue_diagnose_type') }}"
     sequence:
       - choose:

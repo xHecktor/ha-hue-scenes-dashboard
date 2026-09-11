@@ -191,13 +191,39 @@ def _running_label():
     return f"{base} · {_fmt_dur(el)}"
 
 
+_ALL = "Alle Räume + Zonen"
+_ROOM_HEADER = "── Räume ──"
+_ZONE_HEADER = "── Zonen ──"
+
+
+def _is_header(s):
+    return bool(s) and s[:2] == "──"
+
+
+def _resolve_scope(sel):
+    # Map a picker selection to (mode, name, label):
+    #   whole home / "Alle Räume + Zonen" -> rooms AND zones (zones last)
+    #   "── Räume ──"   -> all rooms only
+    #   "── Zonen ──"   -> all zones only
+    #   a specific name -> just that room/zone
+    # "Alle Räume" is kept as a legacy alias so an old stored selection still works.
+    if not sel or sel in (_ALL, "Alle Räume", "…"):
+        return ("all", None, "alle Räume + Zonen")
+    if sel == _ROOM_HEADER:
+        return ("rooms", None, "alle Räume")
+    if sel == _ZONE_HEADER:
+        return ("zones", None, "alle Zonen")
+    return ("one", sel, sel)
+
+
 def _group_scenes(room, lights_all, log_skips=False):
     """Group the room/zone scenes to calibrate: {room_name: {group, scenes:[(eid,name)]}}.
-    Ordered so a whole-home ("Alle Räume") run does the real ROOMS first and the
-    ZONES last, each bucket smallest -> largest. That way the big aggregate zone
-    (e.g. "Wohnung", 40+ lamps) is calibrated last: the quick rooms finish first,
-    and if the run is aborted the important rooms are already done. The picker
-    (input_select) uses the same room/zone split so the menu mirrors this order."""
+    Ordered so a whole-home run does the real ROOMS first and the ZONES last, each
+    bucket smallest -> largest. That way the big aggregate zone (e.g. "Wohnung",
+    40+ lamps) is calibrated last: the quick rooms finish first, and if the run is
+    aborted the important rooms are already done. `room` is a picker selection
+    resolved by _resolve_scope: whole home, all rooms, all zones, or one area."""
+    mode, name, _lbl = _resolve_scope(room)
     raw = {}          # rn -> {group, gtype, size, scenes:[(eid,name)]}
     for eid in state.names("scene"):
         a = state.getattr(eid) or {}
@@ -207,7 +233,11 @@ def _group_scenes(room, lights_all, log_skips=False):
         rn = a.get("group_name")
         if not rn:
             continue
-        if room and slugify(rn) != slugify(room):
+        if mode == "one" and slugify(rn) != slugify(name):
+            continue
+        if mode == "rooms" and gt != "room":
+            continue
+        if mode == "zones" and gt != "zone":
             continue
         g = _group_for(rn, lights_all)
         if g not in lights_all:
@@ -259,10 +289,7 @@ def _show_estimate():
         sel = state.get("input_select.calibrate_room")
     except Exception:
         sel = None
-    if sel and _is_header(sel):
-        _status("Bitte einen Bereich oder eine Zone wählen …", False)
-        return
-    room = None if (not sel or sel in ("Alle Räume", "…")) else sel
+    _mode, _name, scope_label = _resolve_scope(sel)
     try:
         settle = float(state.get("input_number.calibrate_settle"))
     except Exception:
@@ -278,26 +305,17 @@ def _show_estimate():
     except Exception:
         pass
     try:
-        n, nrooms = _count_scenes(room)
+        n, nrooms = _count_scenes(sel)
     except Exception:
         n, nrooms = 0, 1
     p = _effective_parallel(parallel, nrooms)
     est = _estimate_seconds(n, settle, contrast, parallel, nrooms)
-    label = f"Bereit · {n} Szenen ({room or 'alle'}), ~{_fmt_dur(est)} voraussichtlich"
+    label = f"Bereit · {n} Szenen ({scope_label}), ~{_fmt_dur(est)} voraussichtlich"
     if p > 1:
         label += f"  [{p}× parallel]"
     if contrast:
         label += "  [Kontrast]"
     _status(label, False)
-
-
-_ROOM_HEADER = "── Räume ──"
-_ZONE_HEADER = "── Zonen (groß, zuletzt) ──"
-
-
-def _is_header(s):
-    # The picker separators are not real targets -- selecting one starts nothing.
-    return bool(s) and s[:2] == "──"
 
 
 def _calib_targets_grouped():
@@ -337,13 +355,15 @@ def _calib_targets_grouped():
 
 
 def _populate_room_select():
-    # Fill input_select.calibrate_room with "Alle Räume" + a "Räume" group and a
-    # "Zonen" group (mirroring the run order). Done in pyscript (not a start-only
-    # YAML automation with a fixed delay) so the list is reliable after a restart
-    # and always includes newly added rooms/zones. set_options resets the
-    # selection, so restore the current one if it is still a real target.
+    # Fill input_select.calibrate_room with "Alle Räume + Zonen", then a "Räume"
+    # group and a "Zonen" group (mirroring the run order). The group headers are
+    # SELECTABLE actions: "── Räume ──" calibrates all rooms, "── Zonen ──" all
+    # zones. Done in pyscript (not a start-only YAML automation with a fixed
+    # delay) so the list is reliable after a restart and always includes newly
+    # added rooms/zones. set_options resets the selection, so restore the
+    # previous one if it is still present.
     rooms, zones = _calib_targets_grouped()
-    options = ["Alle Räume"]
+    options = [_ALL]
     if rooms:
         options.append(_ROOM_HEADER)
         options.extend(rooms)
@@ -356,7 +376,7 @@ def _populate_room_select():
         cur = None
     try:
         input_select.set_options(entity_id="input_select.calibrate_room", options=options)
-        if cur in options and cur != "Alle Räume" and not _is_header(cur):
+        if cur in options and cur != _ALL:
             input_select.select_option(entity_id="input_select.calibrate_room", option=cur)
     except Exception as e:
         log.warning(f"CALIB: populate room list failed: {e}")
@@ -760,31 +780,33 @@ def _calibrate_run(room=None, settle=10, contrast=True, parallel=1):
     _abort[0] = False
     _errors[0] = []
     _last_room[0] = ""
-    # A picker header ("── Räume ──" / "── Zonen ──") is not a real target.
-    if room and _is_header(room):
-        _status("Bitte einen Bereich oder eine Zone wählen …", False)
-        log.warning("CALIB: header selected, nothing to do")
-        return
-    _cur_scene[0] = f"Kalibriere {room or 'alle Räume'} …"
+    mode, name, scope_label = _resolve_scope(room)
+    _cur_scene[0] = f"Kalibriere {scope_label} …"
     _running[0] = True
     task.create(_ticker)   # live 1 s elapsed-clock updater; stops when _running clears
-    _clog_init(CALIB_LOG, room, contrast, parallel)
+    _clog_init(CALIB_LOG, scope_label, contrast, parallel)
     _status(_running_label(), True)
-    log.warning(f"CALIB worker started (room={room or 'all'}, contrast={contrast})")
+    log.warning(f"CALIB worker started (scope={scope_label}, contrast={contrast})")
 
     db = task.executor(_read_json, FINGERPRINT_FILE)
     if not db:
         # migrate: seed from the pre-v16 location if the new file isn't there yet
         db = task.executor(_read_json, _LEGACY_FINGERPRINT_FILE)
-    if room:
-        for k in list(db.keys()):
-            if slugify(k) == slugify(room):
-                db.pop(k, None)
-    else:
-        db = {}
 
     lights_all = state.names("light")
     rooms = _group_scenes(room, lights_all, log_skips=True)
+
+    # Drop only the areas we're about to re-calibrate; keep the rest. A full
+    # "Alle Räume + Zonen" run rebuilds from scratch.
+    if mode == "all":
+        db = {}
+    else:
+        target_slugs = {}
+        for rn in rooms:
+            target_slugs[slugify(rn)] = True
+        for k in list(db.keys()):
+            if slugify(k) in target_slugs:
+                db.pop(k, None)
 
     total = 0
     for rn in rooms:
@@ -823,8 +845,8 @@ def _calibrate_run(room=None, settle=10, contrast=True, parallel=1):
     dur = _fmt_dur(time.time() - _start_ts[0])
     done = _scene_count[0]
     errs = _errors[0]
-    scope = room or "alle Räume"
-    _status(f"{tag} – {done}/{total} Szenen ({room or 'alle'}) · {dur}", False)
+    scope = scope_label
+    _status(f"{tag} – {done}/{total} Szenen ({scope}) · {dur}", False)
     _clog(CALIB_LOG, f"\n{tag}: {done}/{total} scenes")
     log.warning(f"CALIB {tag}: {done}/{total} scenes -> DB saved")
 
