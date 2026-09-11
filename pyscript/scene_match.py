@@ -946,7 +946,7 @@ fields:
             ct = a.get("color_temp_kelvin")
             parts.append(f"{lid.split('.')[-1]}=b{a.get('brightness')}/ct{ct}")
         ranked = _ranked(FP[key])
-        top = "  ".join(f"{sc.split('.')[-1]}={round(dd, 2)}" for dd, sc in ranked[:3])
+        top = "  ".join([f"{sc.split('.')[-1]}={round(dd, 2)}" for dd, sc in ranked[:3]])
         log.warning(f"TRACE {key} t={i:2d}s | {' '.join(parts)} | {top}")
         task.sleep(1.0)
         i += 1
