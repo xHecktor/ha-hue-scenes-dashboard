@@ -92,6 +92,18 @@ input_number:
     initial: 10
     icon: mdi:timer-sand
 
+  # How many rooms to calibrate at once (whole-home only). Commands are
+  # rate-limited, so this mainly overlaps the settle waits. Default 1 (safest;
+  # no parallel flashing, easiest on the bridge).
+  calibrate_parallel:
+    name: Rooms at once
+    min: 1
+    max: 4
+    step: 1
+    mode: slider
+    initial: 1
+    icon: mdi:home-group
+
   # --- Per-room dynamic speed (one line per room via the anchor) ---
   wohnzimmer_dynamic_speed: &dyn_speed
     name: Speed
@@ -111,6 +123,25 @@ input_select:
     icon: mdi:home-search
     options:
       - "…"
+
+  # Which task the admin card runs (the card shows only the chosen section).
+  hue_task_mode:
+    name: Aufgabe
+    icon: mdi:cog-outline
+    options:
+      - Kalibrieren
+      - Diagnose
+    initial: Kalibrieren
+
+  # Which diagnose to run when Aufgabe = Diagnose.
+  hue_diagnose_type:
+    name: Diagnose-Art
+    icon: mdi:magnify-scan
+    options:
+      - "Erkennung – schnell"
+      - "Erkennung – voll"
+      - "Dim-Drift"
+    initial: "Erkennung – schnell"
 
 
 input_boolean:
@@ -305,16 +336,35 @@ script:
           room: "{{ '' if sel in ['Alle Räume', '…'] else sel }}"
           settle: "{{ states('input_number.calibrate_settle') | int(10) }}"
           contrast: "{{ is_state('input_boolean.calibrate_contrast', 'on') }}"
+          parallel: "{{ states('input_number.calibrate_parallel') | int(1) }}"
 
-  # Diagnose detection for the room chosen in the same picker (read-only).
+  # Diagnose the room chosen in the same picker (read-only). Which diagnose is
+  # chosen by input_select.hue_diagnose_type.
   scene_diagnose_selected:
     alias: "Diagnose selected room"
+    variables:
+      sel: "{{ states('input_select.calibrate_room') }}"
+      room: "{{ '' if sel in ['Alle Räume', '…'] else sel }}"
+      dtype: "{{ states('input_select.hue_diagnose_type') }}"
     sequence:
-      - variables:
-          sel: "{{ states('input_select.calibrate_room') }}"
-      - action: pyscript.scene_diagnose
-        data:
-          room: "{{ '' if sel in ['Alle Räume', '…'] else sel }}"
+      - choose:
+          - conditions: "{{ dtype == 'Dim-Drift' }}"
+            sequence:
+              - action: pyscript.scene_dim_drift
+                data:
+                  room: "{{ room }}"
+          - conditions: "{{ dtype == 'Erkennung – voll' }}"
+            sequence:
+              - action: pyscript.scene_diagnose
+                data:
+                  room: "{{ room }}"
+                  mode: full
+        default:
+          - action: pyscript.scene_diagnose
+            data:
+              room: "{{ room }}"
+              mode: quick
+              settle: "{{ states('input_number.calibrate_settle') | int(10) }}"
 
 
 automation:

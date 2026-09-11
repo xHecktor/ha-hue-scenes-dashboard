@@ -138,13 +138,19 @@ A readable log is written to **`/config/hue_scenes/calibrate_log.txt`**, flushed
 line by line (crash-safe, shows which attributes were marked don't-care per
 lamp). The whole run is a background task, so the action returns immediately.
 
-For a dashboard-friendly version, add `lovelace/calibration_card.yaml` — a
-room picker (or "Alle Räume"), a **settle** slider (default 10 s) and contrast
-toggle, plus **Kalibrieren** and **Diagnose** buttons (each with its own Stop).
-The two status lines (`pyscript.calibration` / `pyscript.scene_diagnose`) show
-the expected runtime for the current selection while idle, and the elapsed +
-remaining time while running; both entities are created at startup so the card
-works right after a restart.
+For a dashboard-friendly version, add `lovelace/calibration_card.yaml`. It picks
+an **Aufgabe** (Kalibrieren or Diagnose) and shows only that section, so the card
+stays small:
+
+- **Kalibrieren** — room picker (or "Alle Räume"), settle (default 10 s),
+  contrast toggle, and *Räume gleichzeitig* (parallel rooms, default 1).
+- **Diagnose** — *Diagnose-Art* (Erkennung schnell/voll, or Dim-Drift) + settle.
+
+Each section has Start and Stop, and a status line (`pyscript.calibration` /
+`pyscript.scene_diagnose`) that shows the expected runtime for the current
+selection while idle, and the elapsed (+ remaining, for calibration) while
+running. Both status entities are created at startup, so the card works right
+after a restart.
 
 ## Diagnose (optional)
 
