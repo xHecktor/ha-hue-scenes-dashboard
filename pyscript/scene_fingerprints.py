@@ -50,16 +50,38 @@ def _fmt_dur(sec):
     return f"{m}:{s:02d}"
 
 
-def _estimate_seconds(nscenes, settle, contrast):
+def _effective_parallel(parallel, nrooms):
+    # Parallelism only overlaps whole-home runs across rooms; it can never exceed
+    # the number of rooms, and a single room (or nrooms<=1) is always serial.
+    try:
+        p = int(parallel)
+    except Exception:
+        p = 1
+    if p < 1:
+        p = 1
+    if nrooms and p > nrooms:
+        p = nrooms
+    return max(1, p)
+
+
+def _estimate_seconds(nscenes, settle, contrast, parallel=1, nrooms=1):
     try:
         settle = float(settle)
     except Exception:
         settle = 10.0
     if contrast:
         per = 2.0 * (settle + _CONTRAST_OVERHEAD)
+        cmds = 6          # 2 prime + 1 scene, run twice
     else:
         per = settle + _PER_SCENE_OVERHEAD
-    return nscenes * per
+        cmds = 1          # one scene command
+    p = _effective_parallel(parallel, nrooms)
+    # The settle waits overlap across parallel workers, so that work divides by p.
+    work = nscenes * per / p
+    # ...but every command from every worker passes through one shared, rate-
+    # limited gate, so the total command time is a floor that does NOT parallelise.
+    cmd_floor = nscenes * cmds * MIN_CMD_INTERVAL
+    return max(work, cmd_floor)
 
 
 # File I/O runs in a worker thread via task.executor -- doing open()/write()
@@ -188,15 +210,16 @@ def _group_scenes(room, lights_all, log_skips=False):
 
 
 def _count_scenes(room):
-    # NOTE: explicit loop, not sum(... for ...). pyscript's interpreter rejects
-    # generator expressions (ast_generatorexp) outside @pyscript_compile, so a
-    # genexp here throws -> the caller's try/except swallowed it and showed
-    # "0 Szenen / ~0:00". The run loop always worked because it, too, loops.
+    # Returns (nscenes, nrooms) for the selection. NOTE: explicit loops, not
+    # sum(... for ...) -- pyscript's interpreter rejects generator expressions
+    # (ast_generatorexp) outside @pyscript_compile, so a genexp here throws ->
+    # the caller's try/except swallowed it and showed "0 Szenen / ~0:00". The
+    # run loop always worked because it, too, loops.
     rooms = _group_scenes(room, state.names("light"))
     n = 0
     for v in rooms.values():
         n += len(v["scenes"])
-    return n
+    return n, len(rooms)
 
 
 def _show_estimate():
@@ -216,13 +239,23 @@ def _show_estimate():
         contrast = state.get("input_boolean.calibrate_contrast") == "on"
     except Exception:
         pass
+    parallel = 1
     try:
-        n = _count_scenes(room)
+        parallel = int(float(state.get("input_number.calibrate_parallel")))
     except Exception:
-        n = 0
-    est = _estimate_seconds(n, settle, contrast)
-    _status(f"Bereit · {n} Szenen ({room or 'alle'}), ~{_fmt_dur(est)} voraussichtlich"
-            + ("  [Kontrast]" if contrast else ""), False)
+        pass
+    try:
+        n, nrooms = _count_scenes(room)
+    except Exception:
+        n, nrooms = 0, 1
+    p = _effective_parallel(parallel, nrooms)
+    est = _estimate_seconds(n, settle, contrast, parallel, nrooms)
+    label = f"Bereit · {n} Szenen ({room or 'alle'}), ~{_fmt_dur(est)} voraussichtlich"
+    if p > 1:
+        label += f"  [{p}× parallel]"
+    if contrast:
+        label += "  [Kontrast]"
+    _status(label, False)
 
 
 @time_trigger("startup")
@@ -243,7 +276,7 @@ def _ticker():
 
 
 @state_trigger("input_select.calibrate_room", "input_number.calibrate_settle",
-               "input_boolean.calibrate_contrast")
+               "input_boolean.calibrate_contrast", "input_number.calibrate_parallel")
 def _calib_inputs_changed(**kwargs):
     # Refresh the estimate live as the user changes room / settle / contrast,
     # but never clobber a running calibration's progress label.
@@ -597,7 +630,8 @@ def _calibrate_run(room=None, settle=10, contrast=True, parallel=1):
     for rn in rooms:
         total += len(rooms[rn]["scenes"])
     _total[0] = total   # feeds the "X/N" progress counter on the dashboard
-    _est_total[0] = _estimate_seconds(total, settle, contrast)  # shown as total time
+    # total time shown live; same parallel-aware estimate as the pre-start label
+    _est_total[0] = _estimate_seconds(total, settle, contrast, parallel, len(rooms))
     _clog(CALIB_LOG, f"{len(rooms)} rooms, {total} scenes\n")
 
     queue = list(rooms.keys())
