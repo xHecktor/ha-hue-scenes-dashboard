@@ -977,7 +977,18 @@ def _on_light_change(**kwargs):
         prev = snap
         task.sleep(1.0)
         waited += 1.0
-    scene_match_all()
+    # Confirm promptly. A scene CHANGE needs CONFIRM_COUNT agreeing evaluations
+    # (PENDING debounce). The lights are already holding still here, so drive
+    # those evaluations now, ~1 s apart, instead of leaving the 2nd one to the
+    # 15 s backstop loop -- that wait was what made detection feel sluggish
+    # (a change could take ~15-25 s to actually switch). Stable state => it
+    # confirms in ~CONFIRM_COUNT seconds. A new light event supersedes us via
+    # task.unique, so this can't fight an in-progress change.
+    reps = CONFIRM_COUNT if CONFIRM_COUNT > 1 else 1
+    for i in range(reps):
+        scene_match_all()
+        if i < reps - 1:
+            task.sleep(1.0)
 
 
 @time_trigger("startup")
