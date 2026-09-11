@@ -103,7 +103,9 @@ def scene_distance(fp_lights, live, p):
         if a.get("dyn") == "dynamic_palette":
             continue
         is_on = a.get("on", False)
-        want_on = not fp.get("off")
+        if is_on and a.get("b") == 0:   # brightness 0 == off (keep in sync)
+            is_on = False
+        want_on = not fp.get("off") and fp.get("bri") != 0
         skip_on = "on" in dc
         if not want_on and not is_on:
             continue

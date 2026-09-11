@@ -13,7 +13,7 @@ import math
 import time
 from homeassistant.util import slugify
 
-VERSION = "v18"  # bumped on every change; printed in the log to confirm what runs
+VERSION = "v19"  # bumped on every change; printed in the log to confirm what runs
 
 # All persistent data for this integration lives in one folder so it is easy to
 # find and back up (was scattered as scene_*.* in /config root). The old paths
@@ -387,7 +387,13 @@ def _scene_distance(lights):
         if state.get(lid) == "unavailable":
             continue
         is_on = state.get(lid) == "on"
-        want_on = not fp.get("off")
+        # Brightness 0 == off, even when the state/flag says otherwise: a scene
+        # can capture a lamp as on-at-bri-0 (or HA reports on with brightness 0),
+        # which otherwise looks like "on but very dim" and collides with real
+        # scenes. Treat it as off on both the fingerprint and the live side.
+        if is_on and attrs.get("brightness") == 0:
+            is_on = False
+        want_on = not fp.get("off") and fp.get("bri") != 0
         skip_on = "on" in dc
         # A light that is off in both the fingerprint and live is not a
         # discriminating feature. Counting it would dilute the average and
