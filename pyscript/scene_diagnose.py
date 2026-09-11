@@ -485,7 +485,11 @@ def _diagnose_run(room=None, settle=4, mode="full"):
         if not db:
             db = task.executor(_read_json, _LEGACY_FINGERPRINT_FILE)
     except Exception as e:
-        log.error(f"DIAGNOSE: could not read fingerprint file: {e}")
+        msg = (f"ERROR: fingerprint database unreadable ({FINGERPRINT_FILE} is not "
+               f"valid JSON): {e}. Fix or restore the file, then re-run.")
+        log.error("DIAGNOSE: " + msg)
+        _write_report_line(REPORT_FILE, msg)
+        _diag_status("Fehler: Fingerprint-DB unlesbar", False)
         return
     if not db:
         msg = (f"ERROR: fingerprint database empty -- checked {FINGERPRINT_FILE} "
@@ -493,6 +497,7 @@ def _diagnose_run(room=None, settle=4, mode="full"):
                f"(exact filename fingerprints.json) or run scene_fingerprint_calibrate first.")
         log.error("DIAGNOSE: " + msg)
         _write_report_line(REPORT_FILE, msg)
+        _diag_status("Fehler: Fingerprint-DB leer", False)
         return
 
     lights_all = state.names("light")
@@ -848,15 +853,24 @@ def _dim_drift_run(room=None, scenes=None, levels=None, settle=4, top=3):
             if s:
                 forced.add(s)
 
-    db = task.executor(_read_json, FINGERPRINT_FILE)
-    if not db:
-        db = task.executor(_read_json, _LEGACY_FINGERPRINT_FILE)
+    try:
+        db = task.executor(_read_json, FINGERPRINT_FILE)
+        if not db:
+            db = task.executor(_read_json, _LEGACY_FINGERPRINT_FILE)
+    except Exception as e:
+        msg = (f"ERROR: fingerprint database unreadable ({FINGERPRINT_FILE} is not "
+               f"valid JSON): {e}. Fix or restore the file, then re-run.")
+        log.error("DIM-DRIFT: " + msg)
+        _write_report_line(DRIFT_REPORT_FILE, msg)
+        _diag_status("Fehler: Fingerprint-DB unlesbar", False)
+        return
     if not db:
         msg = (f"ERROR: fingerprint database empty -- checked {FINGERPRINT_FILE} "
                f"and {_LEGACY_FINGERPRINT_FILE}. Copy your fingerprints there "
                f"(exact filename fingerprints.json) or run scene_fingerprint_calibrate first.")
         log.error("DIM-DRIFT: " + msg)
         _write_report_line(DRIFT_REPORT_FILE, msg)
+        _diag_status("Fehler: Fingerprint-DB leer", False)
         return
 
     lights_all = state.names("light")
