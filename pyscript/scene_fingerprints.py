@@ -31,6 +31,9 @@ _scene_count = [0]      # scenes finished (for the dashboard status)
 _total = [0]            # total scenes to do this run (for the X/N progress counter)
 _abort = [False]        # set by the stop service; workers check and bail out
 _start_ts = [0.0]       # run start time (for elapsed / remaining on the dashboard)
+_est_total = [0.0]      # total estimate for THIS run (shown as the "Gesamtzeit")
+_running = [False]      # true while a run is active -> drives the 1 s ticker
+_cur_scene = [""]       # current scene text; the ticker appends live elapsed to it
 # Rough per-scene seconds used only for the pre-start estimate. A normal pass is
 # roughly settle + overhead; contrast runs each scene twice from primed states.
 _PER_SCENE_OVERHEAD = 4.0
@@ -142,6 +145,17 @@ def _status(label, running):
     state.set("pyscript.calibration", "running" if running else "idle", label=label)
 
 
+def _running_label():
+    # Live status while a run is active: current scene + elapsed / total. The
+    # total is the pre-start estimate (the same "voraussichtlich" figure), so the
+    # running readout stays consistent with what was shown before Start.
+    el = time.time() - _start_ts[0]
+    base = _cur_scene[0] or "Kalibriere …"
+    if _est_total[0]:
+        return f"{base} · {_fmt_dur(el)} / ~{_fmt_dur(_est_total[0])}"
+    return f"{base} · {_fmt_dur(el)}"
+
+
 def _group_scenes(room, lights_all, log_skips=False):
     """Group the room/zone scenes to calibrate: {room_name: {group, scenes:[(eid,name)]}}.
     Mirrors exactly what _calibrate_run processes (incl. meta-zone skip) so the
@@ -174,8 +188,15 @@ def _group_scenes(room, lights_all, log_skips=False):
 
 
 def _count_scenes(room):
+    # NOTE: explicit loop, not sum(... for ...). pyscript's interpreter rejects
+    # generator expressions (ast_generatorexp) outside @pyscript_compile, so a
+    # genexp here throws -> the caller's try/except swallowed it and showed
+    # "0 Szenen / ~0:00". The run loop always worked because it, too, loops.
     rooms = _group_scenes(room, state.names("light"))
-    return sum(len(v["scenes"]) for v in rooms.values())
+    n = 0
+    for v in rooms.values():
+        n += len(v["scenes"])
+    return n
 
 
 def _show_estimate():
@@ -209,6 +230,16 @@ def _calib_startup():
     # Create the entity after a restart (otherwise the card shows "entity not
     # found") and show the estimate for the current selection.
     _show_estimate()
+
+
+def _ticker():
+    # Refresh the elapsed time once a second while a run is active. Without this
+    # the label only changed once per scene, so the elapsed clock appeared to
+    # jump (frozen through each 10 s settle, then a big step). Exits within a
+    # second of _running going False.
+    while _running[0]:
+        _status(_running_label(), True)
+        task.sleep(1.0)
 
 
 @state_trigger("input_select.calibrate_room", "input_number.calibrate_settle",
@@ -461,11 +492,10 @@ def _calibrate_room(rname, group, scene_list, settle, contrast, db):
             done = _scene_count[0]
             tot = _total[0]
             counter = f"{done}/{tot}" if tot else f"{done}"
-            el = time.time() - _start_ts[0]
-            rt = f" · {_fmt_dur(el)} gelaufen"
-            if tot and done:
-                rt += f" · noch ~{_fmt_dur((tot - done) * (el / done))}"
-            _status(f"{rname}: {name}  ({counter}){rt}", True)
+            # Set the current-scene text; the 1 s ticker keeps the elapsed/total
+            # part live between scenes. Push one immediate update too.
+            _cur_scene[0] = f"{rname}: {name}  ({counter})"
+            _status(_running_label(), True)
             log.warning(f"CALIB {rname}: {name}" + (f"  dc={dcs}" if dcs else ""))
         except Exception as e:
             _clog(CALIB_LOG, f"  {rname}: {name}  ERROR {e}")
@@ -528,7 +558,8 @@ description: Abort the background calibration. Workers finish the current scene,
   write what they have, and stop. The dashboard status shows ABGEBROCHEN.
 """
     _abort[0] = True
-    _status("Wird abgebrochen …", True)
+    _cur_scene[0] = "Wird abgebrochen …"
+    _status(_running_label(), True)
     log.warning("CALIB: abort requested")
 
 
@@ -538,10 +569,14 @@ def _calibrate_run(room=None, settle=10, contrast=True, parallel=1):
     _writing[0] = False
     _scene_count[0] = 0
     _total[0] = 0
+    _est_total[0] = 0.0
     _start_ts[0] = time.time()
     _abort[0] = False
+    _cur_scene[0] = f"Kalibriere {room or 'alle Räume'} …"
+    _running[0] = True
+    task.create(_ticker)   # live 1 s elapsed-clock updater; stops when _running clears
     _clog_init(CALIB_LOG, room, contrast, parallel)
-    _status(f"Kalibriere {room or 'alle Räume'} …", True)
+    _status(_running_label(), True)
     log.warning(f"CALIB worker started (room={room or 'all'}, contrast={contrast})")
 
     db = task.executor(_read_json, FINGERPRINT_FILE)
@@ -562,6 +597,7 @@ def _calibrate_run(room=None, settle=10, contrast=True, parallel=1):
     for rn in rooms:
         total += len(rooms[rn]["scenes"])
     _total[0] = total   # feeds the "X/N" progress counter on the dashboard
+    _est_total[0] = _estimate_seconds(total, settle, contrast)  # shown as total time
     _clog(CALIB_LOG, f"{len(rooms)} rooms, {total} scenes\n")
 
     queue = list(rooms.keys())
@@ -587,6 +623,7 @@ def _calibrate_run(room=None, settle=10, contrast=True, parallel=1):
             task.sleep(0.5)
 
     _save_db(db)
+    _running[0] = False   # stop the ticker before writing the final label
     tag = "ABGEBROCHEN" if _abort[0] else "FERTIG"
     dur = _fmt_dur(time.time() - _start_ts[0])
     _status(f"{tag} – {_scene_count[0]}/{total} Szenen ({room or 'alle'}) · {dur}", False)

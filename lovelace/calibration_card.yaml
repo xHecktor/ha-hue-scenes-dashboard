@@ -7,9 +7,9 @@
 #                            settle, Start/Stop
 #
 # Status rows read the `label` of pyscript.calibration / pyscript.scene_diagnose:
-# idle -> expected runtime for the current selection; running -> elapsed (+ for
-# calibration, remaining). Both entities are created at startup, so no
-# "entity not found" after a restart.
+# idle -> expected runtime for the current selection; running -> elapsed / total
+# (the elapsed clock ticks every second). Both entities are created at startup,
+# so no "entity not found" after a restart.
 
 type: vertical-stack
 cards:
