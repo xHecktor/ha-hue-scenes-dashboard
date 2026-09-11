@@ -741,9 +741,19 @@ def scene_learn(scene=None, settle=4, **kwargs):
     Called right after a static activation, so the DB self-heals as scenes
     are used (and new/edited scenes get picked up on first tap). Skipped for
     excluded (adaptive) scenes.
+
+    Fire-and-forget: the actual work (waiting for the lights to settle, then
+    capturing) runs in a BACKGROUND task and this service returns immediately.
+    Otherwise the tap script (`scene_select`, mode: queued) blocked for several
+    seconds per tap on the settle wait, so fast tapping stalled -- the lamps
+    didn't react and then all queued taps spooled out at once.
     """
     if not scene or _excluded(scene):
         return
+    task.create(_scene_learn_bg, scene, settle)
+
+
+def _scene_learn_bg(scene, settle):
     if not FP:
         _load()
     if _DB_BROKEN[0]:
