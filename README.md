@@ -142,15 +142,21 @@ For a dashboard-friendly version, add `lovelace/calibration_card.yaml`. It picks
 an **Aufgabe** (Kalibrieren or Diagnose) and shows only that section, so the card
 stays small:
 
-- **Kalibrieren** — room picker (or "Alle Räume"), settle (default 10 s),
-  contrast toggle, and *Räume gleichzeitig* (parallel rooms, default 1).
+- **Kalibrieren** — room picker, settle (default 10 s), contrast toggle, and
+  *Räume gleichzeitig* (parallel rooms, default 1). The picker is grouped:
+  **Alle Räume + Zonen** (whole home, big zones calibrated last), then a
+  **── Räume ──** header, then a **── Zonen ──** header. The two headers are
+  themselves selectable actions — pick one to calibrate *all rooms* or *all
+  zones* only; a single name calibrates just that area. The list is filled by
+  `scene_fingerprint_refresh_rooms` (also run at startup).
 - **Diagnose** — *Diagnose-Art* (Erkennung schnell/voll, or Dim-Drift) + settle.
 
 Each section has Start and Stop, and a status line (`pyscript.calibration` /
 `pyscript.scene_diagnose`) that shows the expected runtime for the current
-selection while idle, and the elapsed (+ remaining, for calibration) while
-running. Both status entities are created at startup, so the card works right
-after a restart.
+selection while idle, and the elapsed / total time while running. Both status
+entities are created at startup, so the card works right after a restart. A
+calibration run also raises a persistent notification when it finishes, is
+aborted (naming where it stopped), or hits scene errors.
 
 ## Diagnose (optional)
 
