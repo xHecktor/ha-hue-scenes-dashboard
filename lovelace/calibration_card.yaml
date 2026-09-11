@@ -1,46 +1,82 @@
-# Calibration admin card: pick a room (or "Alle Räume"), tune the options and
-# start. Lights briefly flash through every scene while calibrating.
+# Calibration + diagnose admin card: pick a room (or "Alle Räume"), tune the
+# options and start. Lights briefly flash through every scene.
 #
 # Options:
-#   Bereich          – which room/zone (or all) to (re)fingerprint
-#   Einschwingzeit   – seconds to wait per scene before measuring; raise it if
-#                      a lamp's colour is still drifting when recorded
+#   Bereich          – which room/zone (or all) to (re)fingerprint / diagnose
+#   Einschwingzeit   – seconds to wait per scene before measuring; raise it if a
+#                      lamp's colour is still drifting when recorded (default 10)
 #   Kontrast-Modus   – thorough: run each scene twice from opposite states to
 #                      detect lamps a scene doesn't control (~2x flashing)
+#
+# The status rows read the `label` of pyscript.calibration / pyscript.scene_diagnose.
+# Idle: shows the expected runtime for the current selection. Running: shows the
+# elapsed and remaining time. Both entities are created at HA startup, so the
+# card no longer shows "entity not found" after a restart.
 
 type: entities
-title: Kalibrieren
+title: Kalibrieren & Diagnose
 entities:
   - entity: input_select.calibrate_room
     name: Bereich
   - entity: input_number.calibrate_settle
-    name: Einschwingzeit
+    name: Einschwingzeit (s)
   - entity: input_boolean.calibrate_contrast
     name: Kontrast-Modus (gründlich)
-  # Live status line, counts up scene by scene: "Küche: Ruhephase (3)".
+
+  - type: section
+    label: Kalibrieren
+  # Idle: "Bereit · N Szenen (Raum), ~M:SS voraussichtlich".
+  # Running: "Raum: Szene (done/total) · M:SS gelaufen · noch ~M:SS".
   - type: attribute
     entity: pyscript.calibration
     attribute: label
     name: Status
     icon: mdi:fingerprint
-footer:
-  type: buttons
-  entities:
-    - entity: script.scene_calibrate_selected
-      name: Start
-      icon: mdi:play
-      tap_action:
-        action: perform-action
-        perform_action: script.scene_calibrate_selected
-        confirmation:
-          text: >-
-            Kalibrierung starten? Die Lampen flackern kurz durch die Szenen
-            (im Kontrast-Modus etwa doppelt so lange).
-    # Abort a running calibration. Workers finish the current scene, save what
-    # they have, and stop; the status line shows ABGEBROCHEN / FERTIG when done.
-    - entity: pyscript.scene_fingerprint_calibrate_stop
-      name: Stop
-      icon: mdi:stop
-      tap_action:
-        action: perform-action
-        perform_action: pyscript.scene_fingerprint_calibrate_stop
+  - type: buttons
+    entities:
+      - entity: script.scene_calibrate_selected
+        name: Kalibrieren
+        icon: mdi:play
+        tap_action:
+          action: perform-action
+          perform_action: script.scene_calibrate_selected
+          confirmation:
+            text: >-
+              Kalibrierung starten? Die Lampen flackern kurz durch die Szenen
+              (im Kontrast-Modus etwa doppelt so lange).
+      # Abort: the worker finishes the current scene, saves, and stops; the
+      # status then shows ABGEBROCHEN / FERTIG with the total time.
+      - entity: pyscript.scene_fingerprint_calibrate_stop
+        name: Stop
+        icon: mdi:stop
+        tap_action:
+          action: perform-action
+          perform_action: pyscript.scene_fingerprint_calibrate_stop
+
+  - type: section
+    label: Diagnose (nur prüfen, ändert nichts)
+  # Running: "Raum: src→tgt (N geprüft) · M:SS gelaufen". Done: "FERTIG – x OK / y FAIL".
+  - type: attribute
+    entity: pyscript.scene_diagnose
+    attribute: label
+    name: Status
+    icon: mdi:magnify-scan
+  - type: buttons
+    entities:
+      - entity: script.scene_diagnose_selected
+        name: Diagnose
+        icon: mdi:play-circle-outline
+        tap_action:
+          action: perform-action
+          perform_action: script.scene_diagnose_selected
+          confirmation:
+            text: >-
+              Diagnose starten? Fährt jede Szene an und prüft die Erkennung
+              (nur lesend, ändert die Datenbank nicht). Kann einige Minuten
+              dauern – siehe Report /config/hue_scenes/diagnose_report.txt.
+      - entity: pyscript.scene_diagnose_stop
+        name: Stop
+        icon: mdi:stop
+        tap_action:
+          action: perform-action
+          perform_action: pyscript.scene_diagnose_stop

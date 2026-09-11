@@ -86,10 +86,10 @@ input_number:
   calibrate_settle:
     name: Settle (s)
     min: 2
-    max: 12
+    max: 15
     step: 1
     mode: slider
-    initial: 4
+    initial: 10
     icon: mdi:timer-sand
 
   # --- Per-room dynamic speed (one line per room via the anchor) ---
@@ -303,8 +303,18 @@ script:
       - action: pyscript.scene_fingerprint_calibrate
         data:
           room: "{{ '' if sel in ['Alle Räume', '…'] else sel }}"
-          settle: "{{ states('input_number.calibrate_settle') | int(4) }}"
+          settle: "{{ states('input_number.calibrate_settle') | int(10) }}"
           contrast: "{{ is_state('input_boolean.calibrate_contrast', 'on') }}"
+
+  # Diagnose detection for the room chosen in the same picker (read-only).
+  scene_diagnose_selected:
+    alias: "Diagnose selected room"
+    sequence:
+      - variables:
+          sel: "{{ states('input_select.calibrate_room') }}"
+      - action: pyscript.scene_diagnose
+        data:
+          room: "{{ '' if sel in ['Alle Räume', '…'] else sel }}"
 
 
 automation:

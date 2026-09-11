@@ -11,6 +11,7 @@ Requires pyscript with `allow_all_imports: true`.
 """
 
 import json
+import time
 from homeassistant.util import slugify
 
 # All persistent data lives under one folder (was scattered in /config root).
@@ -29,6 +30,33 @@ _writing = [False]      # serialises DB file writes across parallel workers
 _scene_count = [0]      # scenes finished (for the dashboard status)
 _total = [0]            # total scenes to do this run (for the X/N progress counter)
 _abort = [False]        # set by the stop service; workers check and bail out
+_start_ts = [0.0]       # run start time (for elapsed / remaining on the dashboard)
+# Rough per-scene seconds used only for the pre-start estimate. A normal pass is
+# roughly settle + overhead; contrast runs each scene twice from primed states.
+_PER_SCENE_OVERHEAD = 4.0
+_CONTRAST_OVERHEAD = 5.0
+
+
+@pyscript_compile
+def _fmt_dur(sec):
+    sec = int(max(0, sec))
+    m, s = divmod(sec, 60)
+    if m >= 60:
+        h, m = divmod(m, 60)
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
+
+
+def _estimate_seconds(nscenes, settle, contrast):
+    try:
+        settle = float(settle)
+    except Exception:
+        settle = 10.0
+    if contrast:
+        per = 2.0 * (settle + _CONTRAST_OVERHEAD)
+    else:
+        per = settle + _PER_SCENE_OVERHEAD
+    return nscenes * per
 
 
 # File I/O runs in a worker thread via task.executor -- doing open()/write()
@@ -108,10 +136,92 @@ def _write_json(path, data):
 def _status(label, running):
     # Progress shown on the dashboard admin card. Keep it minimal: the state
     # stays "running"/"idle" and only the `label` attribute changes -- this is
-    # the form that reliably re-renders the card live. The counter and ETA are
-    # baked into the label text itself. (Changing the state value or adding
+    # the form that reliably re-renders the card live. Runtime/counter/estimate
+    # are baked into the label text itself. (Changing the state value or adding
     # extra attributes each scene stopped the card from refreshing mid-run.)
     state.set("pyscript.calibration", "running" if running else "idle", label=label)
+
+
+def _group_scenes(room, lights_all, log_skips=False):
+    """Group the room/zone scenes to calibrate: {room_name: {group, scenes:[(eid,name)]}}.
+    Mirrors exactly what _calibrate_run processes (incl. meta-zone skip) so the
+    pre-start estimate counts the same scenes that will actually run."""
+    rooms = {}
+    for eid in state.names("scene"):
+        a = state.getattr(eid) or {}
+        if a.get("group_type") not in ("room", "zone"):
+            continue
+        rn = a.get("group_name")
+        if not rn:
+            continue
+        if room and slugify(rn) != slugify(room):
+            continue
+        g = _group_for(rn, lights_all)
+        if g not in lights_all:
+            if log_skips:
+                _clog(CALIB_LOG, f"[{rn}] skipped (no Hue group)")
+            continue
+        # Skip whole-home meta-zones (a group spanning most lamps) on whole-home
+        # runs -- pointless (overlap every room) and their huge settles stall it.
+        gm = (state.getattr(g) or {}).get("entity_id") or []
+        if not room and len(lights_all) and len(gm) > 0.6 * len(lights_all):
+            if log_skips:
+                _clog(CALIB_LOG, f"[{rn}] skipped (meta-zone, {len(gm)}/{len(lights_all)} lamps)")
+            continue
+        rooms.setdefault(rn, {"group": g, "scenes": []})
+        rooms[rn]["scenes"].append((eid, a.get("name") or eid))
+    return rooms
+
+
+def _count_scenes(room):
+    rooms = _group_scenes(room, state.names("light"))
+    return sum(len(v["scenes"]) for v in rooms.values())
+
+
+def _show_estimate():
+    # Idle label on the card: expected runtime for the CURRENT selection, so the
+    # user sees roughly how long a run will take before starting it.
+    try:
+        sel = state.get("input_select.calibrate_room")
+    except Exception:
+        sel = None
+    room = None if (not sel or sel in ("Alle Räume", "…")) else sel
+    try:
+        settle = float(state.get("input_number.calibrate_settle"))
+    except Exception:
+        settle = 10.0
+    contrast = True
+    try:
+        contrast = state.get("input_boolean.calibrate_contrast") == "on"
+    except Exception:
+        pass
+    try:
+        n = _count_scenes(room)
+    except Exception:
+        n = 0
+    est = _estimate_seconds(n, settle, contrast)
+    _status(f"Bereit · {n} Szenen ({room or 'alle'}), ~{_fmt_dur(est)} voraussichtlich"
+            + ("  [Kontrast]" if contrast else ""), False)
+
+
+@time_trigger("startup")
+def _calib_startup():
+    # Create the entity after a restart (otherwise the card shows "entity not
+    # found") and show the estimate for the current selection.
+    _show_estimate()
+
+
+@state_trigger("input_select.calibrate_room", "input_number.calibrate_settle",
+               "input_boolean.calibrate_contrast")
+def _calib_inputs_changed(**kwargs):
+    # Refresh the estimate live as the user changes room / settle / contrast,
+    # but never clobber a running calibration's progress label.
+    try:
+        st = state.get("pyscript.calibration")
+    except Exception:
+        st = None
+    if st != "running":
+        _show_estimate()
 
 
 def _fp_light(ml, is_on):
@@ -350,9 +460,12 @@ def _calibrate_room(rname, group, scene_list, settle, contrast, db):
             _clog(CALIB_LOG, line)
             done = _scene_count[0]
             tot = _total[0]
-            pct = f" {int(100 * done / tot)}%" if tot else ""
             counter = f"{done}/{tot}" if tot else f"{done}"
-            _status(f"{rname}: {name}  ({counter}{pct})", True)
+            el = time.time() - _start_ts[0]
+            rt = f" · {_fmt_dur(el)} gelaufen"
+            if tot and done:
+                rt += f" · noch ~{_fmt_dur((tot - done) * (el / done))}"
+            _status(f"{rname}: {name}  ({counter}){rt}", True)
             log.warning(f"CALIB {rname}: {name}" + (f"  dc={dcs}" if dcs else ""))
         except Exception as e:
             _clog(CALIB_LOG, f"  {rname}: {name}  ERROR {e}")
@@ -378,7 +491,7 @@ _CALIB_WORKERS = []
 
 
 @service
-def scene_fingerprint_calibrate(room=None, settle=4, contrast=True, parallel=1):
+def scene_fingerprint_calibrate(room=None, settle=10, contrast=True, parallel=1):
     """yaml
 name: Calibrate scene fingerprints
 fields:
@@ -419,12 +532,13 @@ description: Abort the background calibration. Workers finish the current scene,
     log.warning("CALIB: abort requested")
 
 
-def _calibrate_run(room=None, settle=4, contrast=True, parallel=1):
+def _calibrate_run(room=None, settle=10, contrast=True, parallel=1):
     task.unique("scene_calibrate")
     _cmd_busy[0] = False
     _writing[0] = False
     _scene_count[0] = 0
     _total[0] = 0
+    _start_ts[0] = time.time()
     _abort[0] = False
     _clog_init(CALIB_LOG, room, contrast, parallel)
     _status(f"Kalibriere {room or 'alle Räume'} …", True)
@@ -442,30 +556,7 @@ def _calibrate_run(room=None, settle=4, contrast=True, parallel=1):
         db = {}
 
     lights_all = state.names("light")
-    rooms = {}
-    for eid in state.names("scene"):
-        a = state.getattr(eid) or {}
-        if a.get("group_type") not in ("room", "zone"):
-            continue
-        rn = a.get("group_name")
-        if not rn:
-            continue
-        if room and slugify(rn) != slugify(room):
-            continue
-        g = _group_for(rn, lights_all)
-        if g not in lights_all:
-            _clog(CALIB_LOG, f"[{rn}] skipped (no Hue group)")
-            continue
-        # Skip whole-home meta-zones (a group spanning most lamps, e.g. an
-        # "apartment" zone) on whole-home runs -- fingerprinting them is
-        # pointless (they overlap every room) and their huge settles stall the
-        # run. Still allowed if the user calibrates that zone by name.
-        gm = (state.getattr(g) or {}).get("entity_id") or []
-        if not room and len(lights_all) and len(gm) > 0.6 * len(lights_all):
-            _clog(CALIB_LOG, f"[{rn}] skipped (meta-zone, {len(gm)}/{len(lights_all)} lamps)")
-            continue
-        rooms.setdefault(rn, {"group": g, "scenes": []})
-        rooms[rn]["scenes"].append((eid, a.get("name") or eid))
+    rooms = _group_scenes(room, lights_all, log_skips=True)
 
     total = 0
     for rn in rooms:
@@ -497,7 +588,8 @@ def _calibrate_run(room=None, settle=4, contrast=True, parallel=1):
 
     _save_db(db)
     tag = "ABGEBROCHEN" if _abort[0] else "FERTIG"
-    _status(f"{tag} – {_scene_count[0]}/{total} Szenen ({room or 'alle'})", False)
+    dur = _fmt_dur(time.time() - _start_ts[0])
+    _status(f"{tag} – {_scene_count[0]}/{total} Szenen ({room or 'alle'}) · {dur}", False)
     _clog(CALIB_LOG, f"\n{tag}: {_scene_count[0]}/{total} scenes")
     log.warning(f"CALIB {tag}: {_scene_count[0]}/{total} scenes -> DB saved")
     _abort[0] = False

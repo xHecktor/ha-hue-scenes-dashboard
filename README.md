@@ -139,8 +139,12 @@ line by line (crash-safe, shows which attributes were marked don't-care per
 lamp). The whole run is a background task, so the action returns immediately.
 
 For a dashboard-friendly version, add `lovelace/calibration_card.yaml` — a
-room picker (or "Alle Räume") with a **Kalibrieren** button and a live status
-line fed by the `pyscript.calibration` entity.
+room picker (or "Alle Räume"), a **settle** slider (default 10 s) and contrast
+toggle, plus **Kalibrieren** and **Diagnose** buttons (each with its own Stop).
+The two status lines (`pyscript.calibration` / `pyscript.scene_diagnose`) show
+the expected runtime for the current selection while idle, and the elapsed +
+remaining time while running; both entities are created at startup so the card
+works right after a restart.
 
 ## Diagnose (optional)
 

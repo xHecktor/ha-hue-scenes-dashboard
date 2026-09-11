@@ -23,6 +23,7 @@ Requires pyscript with allow_all_imports: true.
 """
 
 import json
+import time
 from homeassistant.util import slugify
 
 
@@ -39,7 +40,45 @@ _LEGACY_FINGERPRINT_FILE = "/config/scene_fingerprints.json"
 REPORT_FILE = DATA_DIR + "/diagnose_report.txt"
 DRIFT_REPORT_FILE = DATA_DIR + "/dim_drift_report.txt"
 TRACKER = "pyscript.scene_tracker"
+STATUS = "pyscript.scene_diagnose"   # dashboard status entity (label + running)
 EXCLUDE_SUFFIXES = ("_naturliches_licht",)
+
+_diag_abort = [False]   # set by scene_diagnose_stop; the run checks it and bails
+_diag_start = [0.0]     # run start time (for elapsed on the dashboard)
+
+
+@pyscript_compile
+def _fmt_dur(sec):
+    sec = int(max(0, sec))
+    m, s = divmod(sec, 60)
+    if m >= 60:
+        h, m = divmod(m, 60)
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
+
+
+def _diag_status(label, running):
+    # Single reliably-refreshing `label` attribute (same approach as the
+    # calibration card), so runtime/progress show live and survive a restart.
+    state.set(STATUS, "running" if running else "idle", label=label)
+
+
+@time_trigger("startup")
+def _diag_startup():
+    # Create the entity after a restart so the dashboard doesn't show
+    # "entity not found".
+    _diag_status("Bereit", False)
+
+
+@service
+def scene_diagnose_stop(**kwargs):
+    """yaml
+name: Stop diagnose / dim-drift
+description: Abort a running scene_diagnose or scene_dim_drift. The current
+  transition finishes, then the run stops and the status shows ABGEBROCHEN.
+"""
+    _diag_abort[0] = True
+    _diag_status("Wird abgebrochen …", True)
 
 
 @pyscript_compile
@@ -428,6 +467,9 @@ fields:
 
 def _diagnose_run(room=None, settle=4, mode="full"):
     task.unique("scene_diagnose")
+    _diag_abort[0] = False
+    _diag_start[0] = time.time()
+    _diag_status(f"Diagnose {room or 'alle Räume'} …", True)
     log.warning(
         f"DIAGNOSE {VERSION}: worker started "
         f"(room={room or 'all'}, settle={settle}, mode={mode})"
@@ -435,6 +477,7 @@ def _diagnose_run(room=None, settle=4, mode="full"):
 
     if not _init_report(REPORT_FILE, room, settle, mode):
         log.error("DIAGNOSE: stopping - report file not writable")
+        _diag_status("Fehler: Report nicht schreibbar", False)
         return
 
     try:
@@ -460,6 +503,8 @@ def _diagnose_run(room=None, settle=4, mode="full"):
     slowest_what = "-"
 
     for rname, scenes in db.items():
+        if _diag_abort[0]:
+            break
         if room and slugify(rname) != slugify(room):
             continue
         group = _group_for(rname, lights_all)
@@ -536,8 +581,14 @@ def _diagnose_run(room=None, settle=4, mode="full"):
         _write_report_line(REPORT_FILE, "")
 
         for src, target, activate_src in steps:
+            if _diag_abort[0]:
+                break
             sshort = src.split(".")[-1]
             tshort = target.split(".")[-1]
+            el = time.time() - _diag_start[0]
+            _diag_status(
+                f"{rname}: {sshort.split('_')[-1]}→{tshort.split('_')[-1]}  "
+                f"({n_ok + n_fail} geprüft) · {_fmt_dur(el)} gelaufen", True)
             try:
                 if activate_src:
                     scene.turn_on(entity_id=src)
@@ -568,8 +619,9 @@ def _diagnose_run(room=None, settle=4, mode="full"):
                 log.error(f"DIAGNOSE error {rname} {sshort}->{tshort}: {e}")
                 _write_report_line(REPORT_FILE, f"  ERR  {sshort} -> {tshort}: {e}")
 
+    tag = "ABGEBROCHEN" if _diag_abort[0] else "done"
     summary = (
-        f"DIAGNOSE done: {n_ok} OK, {n_fail} FAIL | "
+        f"DIAGNOSE {tag}: {n_ok} OK, {n_fail} FAIL | "
         f"slowest settle {slowest:.0f}s ({slowest_what})"
     )
     log.warning(summary)
@@ -581,6 +633,9 @@ def _diagnose_run(room=None, settle=4, mode="full"):
         for f in fails:
             _write_report_line(REPORT_FILE, f"  {f}")
     log.warning(f"DIAGNOSE report written to {REPORT_FILE}")
+    dur = _fmt_dur(time.time() - _diag_start[0])
+    fin = "ABGEBROCHEN" if _diag_abort[0] else "FERTIG"
+    _diag_status(f"{fin} – {n_ok} OK / {n_fail} FAIL · {dur}", False)
 
 
 # ---------------------------------------------------------------------------
@@ -767,8 +822,12 @@ fields:
 
 def _dim_drift_run(room=None, scenes=None, levels=None, settle=4, top=3):
     task.unique("scene_dim_drift")
+    _diag_abort[0] = False
+    _diag_start[0] = time.time()
+    _diag_status(f"Dim-Drift {room or 'alle Räume'} …", True)
     if not _init_report(DRIFT_REPORT_FILE, room, settle, "dim-drift"):
         log.error("DIM-DRIFT: report not writable")
+        _diag_status("Fehler: Report nicht schreibbar", False)
         return
     # explicit loops (no genexps/comprehensions -- pyscript interprets this
     # function and only supports those inside @pyscript_compile helpers)
@@ -803,6 +862,8 @@ def _dim_drift_run(room=None, scenes=None, levels=None, settle=4, top=3):
     lights_all = state.names("light")
     breaks = []   # (room, scene, first level where detection fails)
     for rname, entries in db.items():
+        if _diag_abort[0]:
+            break
         group = _group_for(rname, lights_all)
         if not group or group not in lights_all:
             continue
@@ -844,7 +905,12 @@ def _dim_drift_run(room=None, scenes=None, levels=None, settle=4, top=3):
                            f"[{rname}]  group={group}  ({len(ranked)} colourful scenes)")
 
         for cf, full, entry in ranked:
+            if _diag_abort[0]:
+                break
             sshort = full.split(".")[-1]
+            el = time.time() - _diag_start[0]
+            _diag_status(f"Dim-Drift {rname}: {sshort.split('_')[-1]} · "
+                         f"{_fmt_dur(el)} gelaufen", True)
             try:
                 scene.turn_on(entity_id=full)
             except Exception as e:
@@ -905,7 +971,11 @@ def _dim_drift_run(room=None, scenes=None, levels=None, settle=4, top=3):
                                    f"     -> bis {lvls[-1]}% korrekt erkannt")
 
     _write_report_line(DRIFT_REPORT_FILE, "")
-    _write_report_line(DRIFT_REPORT_FILE, f"DIM-DRIFT done: {len(breaks)} Szenen brechen vor dem tiefsten Level")
+    tag = "ABGEBROCHEN" if _diag_abort[0] else "done"
+    _write_report_line(DRIFT_REPORT_FILE, f"DIM-DRIFT {tag}: {len(breaks)} Szenen brechen vor dem tiefsten Level")
     for r, s, lvl in breaks:
         _write_report_line(DRIFT_REPORT_FILE, f"  {r}: {s} -> {lvl}%")
     log.warning(f"DIM-DRIFT report written to {DRIFT_REPORT_FILE}")
+    dur = _fmt_dur(time.time() - _diag_start[0])
+    fin = "ABGEBROCHEN" if _diag_abort[0] else "FERTIG"
+    _diag_status(f"{fin} – Dim-Drift · {dur}", False)
