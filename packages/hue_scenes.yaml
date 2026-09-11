@@ -197,6 +197,8 @@ script:
       - action: scene.turn_on
         target:
           entity_id: "{{ scene }}"
+      # scene_set_active marks the room active instantly AND drops it from the
+      # dynamic map (ends dynamic mode: clears the red highlight + speed slider).
       - action: pyscript.scene_set_active
         data:
           room: "{{ state_attr(scene, 'group_name') }}"
@@ -204,23 +206,6 @@ script:
       - action: pyscript.scene_learn
         data:
           scene: "{{ scene }}"
-      # a static pick means the room is no longer dynamic -> drop it from the map
-      - variables:
-          room: "{{ state_attr(scene, 'group_name') }}"
-          cur_dyn: >-
-            {{ (states('input_text.dynamic_scenes') | from_json)
-               if states('input_text.dynamic_scenes') not in ['', 'unknown', 'unavailable']
-               else {} }}
-      - action: input_text.set_value
-        target:
-          entity_id: input_text.dynamic_scenes
-        data:
-          value: >-
-            {% set ns = namespace(d={}) %}
-            {% for k, v in cur_dyn.items() if k != room %}
-              {% set ns.d = ns.d | combine({k: v}) %}
-            {% endfor %}
-            {{ ns.d | to_json }}
 
   # Double tap: activate dynamically, record it, and set the room's speed
   # slider to the scene's own default speed.

@@ -720,6 +720,18 @@ def scene_set_active(room=None, scene=None, **kwargs):
     result[room] = scene
     LOCK[room] = time.time() + LOCK_SECONDS
     state.set(TRACKER, "ok", active_scene=result)
+    # A static tap (this scene again, or another scene in the same room) ends the
+    # dynamic mode: drop the room from the dynamic map right now, so the red
+    # highlight and the speed slider clear immediately -- not seconds later after
+    # scene_learn's settle wait, and not via fragile templating.
+    try:
+        dmap = json.loads(state.get("input_text.dynamic_scenes") or "{}")
+    except Exception:
+        dmap = {}
+    if room in dmap:
+        dmap.pop(room, None)
+        input_text.set_value(entity_id="input_text.dynamic_scenes",
+                             value=json.dumps(dmap))
 
 
 @service
