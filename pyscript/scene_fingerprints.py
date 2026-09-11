@@ -365,7 +365,22 @@ def _populate_room_select():
 @time_trigger("startup")
 def _calib_startup():
     # Create the entity after a restart (otherwise the card shows "entity not
-    # found"), fill the room picker (incl. big zones), and show the estimate.
+    # found"), fill the room picker (grouped Räume/Zonen), and show the estimate.
+    # pyscript's "startup" can fire before HA has registered the input helpers,
+    # so set_options would silently no-op and the picker kept its old flat list.
+    # Wait until the picker entity actually exists first (up to ~60 s).
+    ok = False
+    for _ in range(30):
+        try:
+            if state.get("input_select.calibrate_room") is not None:
+                ok = True
+                break
+        except Exception:
+            pass
+        task.sleep(2.0)
+    if not ok:
+        log.warning("CALIB: input_select.calibrate_room never appeared; "
+                    "picker not repopulated")
     _populate_room_select()
     _show_estimate()
 

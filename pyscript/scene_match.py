@@ -294,7 +294,15 @@ def _load_params():
     global CT_TERM_CAP, BLEND_WEIGHT, KEEP_MARGIN, ACCEPT, CLEAR
     global OFF_PENALTY, BRI_TERM_CAP, CF_THRESHOLD, CONFIRM_COUNT, SETTLE_MAX
     global EFFECT_PENALTY, EFFECT_COLOR_WEIGHT
-    over = task.executor(_read_json, PARAMS_FILE)
+    try:
+        over = task.executor(_read_json, PARAMS_FILE)
+    except Exception as e:
+        # A corrupt params.json must never break the matcher -- it used to throw
+        # here every loop ("Matcher error: Extra data ..."). Ignore it and keep
+        # the code defaults; delete/fix the file to re-enable tuned overrides.
+        log.error(f"Matcher {VERSION}: {PARAMS_FILE} unreadable ({e}); using "
+                  f"default parameters. Delete or fix that file.")
+        return
     if not over:
         return
     applied = {}
@@ -329,10 +337,17 @@ def _load_params():
 def _load():
     global FP
     _load_params()
-    FP = task.executor(_read_json, FINGERPRINT_FILE)
-    if not FP:
-        # fall back to the pre-v16 location (/config/scene_fingerprints.json)
-        FP = task.executor(_read_json, _LEGACY_FINGERPRINT_FILE)
+    try:
+        FP = task.executor(_read_json, FINGERPRINT_FILE)
+        if not FP:
+            # fall back to the pre-v16 location (/config/scene_fingerprints.json)
+            FP = task.executor(_read_json, _LEGACY_FINGERPRINT_FILE)
+    except Exception as e:
+        # A corrupt fingerprint DB must not crash-loop the matcher either; log
+        # clearly which file to check and carry on with what we had.
+        log.error(f"Matcher {VERSION}: {FINGERPRINT_FILE} unreadable ({e}); "
+                  f"detection paused until the file is valid JSON.")
+        return
     total = 0
     for v in FP.values():
         total += len(v)
