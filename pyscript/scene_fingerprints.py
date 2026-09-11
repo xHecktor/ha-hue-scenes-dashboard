@@ -34,6 +34,9 @@ _start_ts = [0.0]       # run start time (for elapsed / remaining on the dashboa
 _est_total = [0.0]      # total estimate for THIS run (shown as the "Gesamtzeit")
 _running = [False]      # true while a run is active -> drives the 1 s ticker
 _cur_scene = [""]       # current scene text; the ticker appends live elapsed to it
+_errors = [[]]          # (room, scene, msg) tuples that failed this run
+_last_room = [""]       # last room the run started -> "stopped at" on abort/finish
+_NOTIFY_ID = "hue_scene_calibrate"   # one persistent notification, replaced each run
 # Rough per-scene seconds used only for the pre-start estimate. A normal pass is
 # roughly settle + overhead; contrast runs each scene twice from primed states.
 _PER_SCENE_OVERHEAD = 4.0
@@ -167,6 +170,16 @@ def _status(label, running):
     state.set("pyscript.calibration", "running" if running else "idle", label=label)
 
 
+def _notify(title, message):
+    # Pop up a persistent notification (bell in the HA sidebar). One fixed id, so
+    # a new run's result replaces the previous one instead of piling up.
+    try:
+        persistent_notification.create(title=title, message=message,
+                                       notification_id=_NOTIFY_ID)
+    except Exception as e:
+        log.warning(f"CALIB: notify failed: {e}")
+
+
 def _running_label():
     # Live status while a run is active: current scene + elapsed / total. The
     # total is the pre-start estimate (the same "voraussichtlich" figure), so the
@@ -180,12 +193,16 @@ def _running_label():
 
 def _group_scenes(room, lights_all, log_skips=False):
     """Group the room/zone scenes to calibrate: {room_name: {group, scenes:[(eid,name)]}}.
-    Mirrors exactly what _calibrate_run processes (incl. meta-zone skip) so the
-    pre-start estimate counts the same scenes that will actually run."""
-    rooms = {}
+    Ordered so a whole-home ("Alle Räume") run does the real ROOMS first and the
+    ZONES last, each bucket smallest -> largest. That way the big aggregate zone
+    (e.g. "Wohnung", 40+ lamps) is calibrated last: the quick rooms finish first,
+    and if the run is aborted the important rooms are already done. The picker
+    (input_select) uses the same room/zone split so the menu mirrors this order."""
+    raw = {}          # rn -> {group, gtype, size, scenes:[(eid,name)]}
     for eid in state.names("scene"):
         a = state.getattr(eid) or {}
-        if a.get("group_type") not in ("room", "zone"):
+        gt = a.get("group_type")
+        if gt not in ("room", "zone"):
             continue
         rn = a.get("group_name")
         if not rn:
@@ -197,42 +214,28 @@ def _group_scenes(room, lights_all, log_skips=False):
             if log_skips:
                 _clog(CALIB_LOG, f"[{rn}] skipped (no Hue group)")
             continue
-        rooms.setdefault(rn, {"group": g, "scenes": []})
-        rooms[rn]["scenes"].append((eid, a.get("name") or eid))
+        if rn not in raw:
+            gm = (state.getattr(g) or {}).get("entity_id") or []
+            raw[rn] = {"group": g, "gtype": gt, "size": len(gm), "scenes": []}
+        raw[rn]["scenes"].append((eid, a.get("name") or eid))
 
-    # Skip whole-home meta-zones on whole-home runs. A Hue zone like "Wohnung"
-    # spans every room; calibrating it is pointless (overlaps all rooms) and its
-    # 40+-lamp settle waits stall the whole queue, so the real rooms behind it in
-    # the queue never run. The old test ("> 60% of all lamps") depended on the
-    # total lamp count and let a 43-of-~75 zone slip through. Detect it by SIZE
-    # relative to the other rooms instead: a group whose lamp count dwarfs the
-    # typical room (>= 4x the median, floor 15) -- or still spans over half the
-    # home -- is a meta-zone. A single real room (even a big open-plan one) sits
-    # near the median; only whole-flat zones are outliers. Only on whole-home
-    # runs; when a specific room is requested the user chose it deliberately.
-    if not room and len(rooms) > 1:
-        members = {}
-        sizes = []
-        for rn in rooms:
-            gm = (state.getattr(rooms[rn]["group"]) or {}).get("entity_id") or []
-            members[rn] = len(gm)
-            sizes.append(len(gm))
-        sizes.sort()
-        n = len(sizes)
-        mid = n // 2
-        med = sizes[mid] if (n % 2) else (sizes[mid - 1] + sizes[mid]) / 2.0
-        big = max(15, 4 * med)
-        drop = []
-        for rn in rooms:
-            sz = members[rn]
-            span = len(lights_all) and sz > 0.5 * len(lights_all)
-            if sz > big or span:
-                drop.append(rn)
-        for rn in drop:
-            rooms.pop(rn, None)
-            if log_skips:
-                _clog(CALIB_LOG, f"[{rn}] skipped (meta-zone, {members[rn]} Lampen, "
-                                 f"Median {med:g})")
+    # Order rooms before zones, each bucket small -> large (tuple sort, no lambda:
+    # pyscript's interpreter only allows key=lambda inside @pyscript_compile).
+    rpairs = []
+    zpairs = []
+    for rn in raw:
+        pair = (raw[rn]["size"], rn)
+        if raw[rn]["gtype"] == "zone":
+            zpairs.append(pair)
+        else:
+            rpairs.append(pair)
+    rpairs.sort()
+    zpairs.sort()
+    rooms = {}
+    for sz, rn in rpairs:
+        rooms[rn] = {"group": raw[rn]["group"], "scenes": raw[rn]["scenes"]}
+    for sz, rn in zpairs:
+        rooms[rn] = {"group": raw[rn]["group"], "scenes": raw[rn]["scenes"]}
     return rooms
 
 
@@ -256,6 +259,9 @@ def _show_estimate():
         sel = state.get("input_select.calibrate_room")
     except Exception:
         sel = None
+    if sel and _is_header(sel):
+        _status("Bitte einen Bereich oder eine Zone wählen …", False)
+        return
     room = None if (not sel or sel in ("Alle Räume", "…")) else sel
     try:
         settle = float(state.get("input_number.calibrate_settle"))
@@ -285,38 +291,72 @@ def _show_estimate():
     _status(label, False)
 
 
-def _all_calib_targets():
-    # Every calibratable room/zone name (room- or zone-type scene groups),
-    # INCLUDING whole-home meta-zones. The picker lists all of these so a big
-    # zone like "Wohnung" can be calibrated on demand; only the "Alle Räume"
-    # batch run skips the meta-zones (see _group_scenes) so it can't stall.
-    names = []
+_ROOM_HEADER = "── Räume ──"
+_ZONE_HEADER = "── Zonen (groß, zuletzt) ──"
+
+
+def _is_header(s):
+    # The picker separators are not real targets -- selecting one starts nothing.
+    return bool(s) and s[:2] == "──"
+
+
+def _calib_targets_grouped():
+    # (rooms, zones) name lists, each ordered small -> large to mirror the run
+    # order in _group_scenes, so the menu shows what runs and in which order.
+    rpairs = []
+    zpairs = []
     seen = {}
+    lights_all = state.names("light")
     for eid in state.names("scene"):
         a = state.getattr(eid) or {}
-        if a.get("group_type") not in ("room", "zone"):
+        gt = a.get("group_type")
+        if gt not in ("room", "zone"):
             continue
         rn = a.get("group_name")
-        if rn and rn not in seen:
-            seen[rn] = True
-            names.append(rn)
-    names.sort()
-    return names
+        if not rn or rn in seen:
+            continue
+        seen[rn] = True
+        g = _group_for(rn, lights_all)
+        if g not in lights_all:
+            continue
+        gm = (state.getattr(g) or {}).get("entity_id") or []
+        pair = (len(gm), rn)
+        if gt == "zone":
+            zpairs.append(pair)
+        else:
+            rpairs.append(pair)
+    rpairs.sort()
+    zpairs.sort()
+    rooms = []
+    for sz, rn in rpairs:
+        rooms.append(rn)
+    zones = []
+    for sz, rn in zpairs:
+        zones.append(rn)
+    return rooms, zones
 
 
 def _populate_room_select():
-    # Fill input_select.calibrate_room with "Alle Räume" + every room/zone. Done
-    # in pyscript (not a start-only YAML automation with a fixed delay) so the
-    # list is reliable after a restart and always includes newly added zones.
-    # set_options resets the selection, so restore the current one if still valid.
-    options = ["Alle Räume"] + _all_calib_targets()
+    # Fill input_select.calibrate_room with "Alle Räume" + a "Räume" group and a
+    # "Zonen" group (mirroring the run order). Done in pyscript (not a start-only
+    # YAML automation with a fixed delay) so the list is reliable after a restart
+    # and always includes newly added rooms/zones. set_options resets the
+    # selection, so restore the current one if it is still a real target.
+    rooms, zones = _calib_targets_grouped()
+    options = ["Alle Räume"]
+    if rooms:
+        options.append(_ROOM_HEADER)
+        options.extend(rooms)
+    if zones:
+        options.append(_ZONE_HEADER)
+        options.extend(zones)
     try:
         cur = state.get("input_select.calibrate_room")
     except Exception:
         cur = None
     try:
         input_select.set_options(entity_id="input_select.calibrate_room", options=options)
-        if cur in options and cur != "Alle Räume":
+        if cur in options and cur != "Alle Räume" and not _is_header(cur):
             input_select.select_option(entity_id="input_select.calibrate_room", option=cur)
     except Exception as e:
         log.warning(f"CALIB: populate room list failed: {e}")
@@ -432,13 +472,32 @@ def _force_refresh(members):
         log.warning(f"FINGERPRINT: update_entity failed: {e}")
 
 
-def _wait_settled(members, settle, max_wait=45.0):
+def _settle_ceiling(members, settle):
+    # Upper bound on how long a single scene may take to settle. It SCALES with
+    # the group size -- a 40-lamp zone needs far longer than a 3-lamp room, so a
+    # fixed 45 s cut a big zone off mid-transition. It is also always kept above
+    # `settle` itself (+8 s headroom), so a large settle value can still trigger
+    # the early-exit instead of being silently swallowed by the cap (settle=60
+    # used to hit the old 45 s ceiling and waste the full time on every scene).
+    n = len(members) if members else 0
+    ceil = 20.0 + 1.5 * n
+    lo = float(settle) + 8.0
+    if ceil < lo:
+        ceil = lo
+    if ceil > 150.0:
+        ceil = 150.0
+    return ceil
+
+
+def _wait_settled(members, settle, max_wait=None):
     # Wait at least `settle` seconds and until two 1s-apart reads are identical
     # (brightness AND color_mode AND colour, or max_wait), so we record the
-    # settled state, not a mid-transition one. The cap is generous because a
-    # laggy lamp can take 20-30 s for its colour temperature to catch up; fast
-    # lamps still return in a few seconds via the early-exit. A forced refresh
-    # each second nudges a lamp whose ct is stuck on a stale reported value.
+    # settled state, not a mid-transition one. The ceiling scales with the group
+    # size (see _settle_ceiling); fast lamps still return in a few seconds via the
+    # early-exit. A forced refresh each second nudges a lamp whose ct is stuck on
+    # a stale reported value.
+    if max_wait is None:
+        max_wait = _settle_ceiling(members, settle)
     prev = None
     waited = 0.0
     while waited < max_wait:
@@ -579,6 +638,7 @@ def _calibrate_scene(group, members, eid, settle, contrast):
 def _calibrate_room(rname, group, scene_list, settle, contrast, db):
     members = (state.getattr(group) or {}).get("entity_id") or []
     db[rname] = {}
+    _last_room[0] = rname
     _clog(CALIB_LOG, f"[{rname}] start  group={group}  {len(scene_list)} scenes")
     for eid, name in scene_list:
         if _abort[0]:
@@ -608,6 +668,7 @@ def _calibrate_room(rname, group, scene_list, settle, contrast, db):
             _status(_running_label(), True)
             log.warning(f"CALIB {rname}: {name}" + (f"  dc={dcs}" if dcs else ""))
         except Exception as e:
+            _errors[0].append((rname, name, str(e)))
             _clog(CALIB_LOG, f"  {rname}: {name}  ERROR {e}")
             log.error(f"CALIB {rname} {eid}: {e}")
     _save_db(db)          # crash-safe: the room's results are on disk now
@@ -616,7 +677,7 @@ def _calibrate_room(rname, group, scene_list, settle, contrast, db):
 
 def _calib_worker(queue, rooms, settle, contrast, db, done):
     while queue and not _abort[0]:
-        rname = queue.pop()
+        rname = queue.pop(0)   # front -> keep the rooms-first, zones-last order
         try:
             info = rooms[rname]
             _calibrate_room(rname, info["group"], info["scenes"], settle, contrast, db)
@@ -682,6 +743,13 @@ def _calibrate_run(room=None, settle=10, contrast=True, parallel=1):
     _est_total[0] = 0.0
     _start_ts[0] = time.time()
     _abort[0] = False
+    _errors[0] = []
+    _last_room[0] = ""
+    # A picker header ("── Räume ──" / "── Zonen ──") is not a real target.
+    if room and _is_header(room):
+        _status("Bitte einen Bereich oder eine Zone wählen …", False)
+        log.warning("CALIB: header selected, nothing to do")
+        return
     _cur_scene[0] = f"Kalibriere {room or 'alle Räume'} …"
     _running[0] = True
     task.create(_ticker)   # live 1 s elapsed-clock updater; stops when _running clears
@@ -720,7 +788,7 @@ def _calibrate_run(room=None, settle=10, contrast=True, parallel=1):
 
     if nworkers == 1:
         while queue and not _abort[0]:
-            rn = queue.pop()
+            rn = queue.pop(0)   # front -> rooms first, big zones last
             info = rooms[rn]
             _calibrate_room(rn, info["group"], info["scenes"], settle, contrast, db)
     else:
@@ -735,9 +803,32 @@ def _calibrate_run(room=None, settle=10, contrast=True, parallel=1):
 
     _save_db(db)
     _running[0] = False   # stop the ticker before writing the final label
-    tag = "ABGEBROCHEN" if _abort[0] else "FERTIG"
+    aborted = _abort[0]
+    tag = "ABGEBROCHEN" if aborted else "FERTIG"
     dur = _fmt_dur(time.time() - _start_ts[0])
-    _status(f"{tag} – {_scene_count[0]}/{total} Szenen ({room or 'alle'}) · {dur}", False)
-    _clog(CALIB_LOG, f"\n{tag}: {_scene_count[0]}/{total} scenes")
-    log.warning(f"CALIB {tag}: {_scene_count[0]}/{total} scenes -> DB saved")
+    done = _scene_count[0]
+    errs = _errors[0]
+    scope = room or "alle Räume"
+    _status(f"{tag} – {done}/{total} Szenen ({room or 'alle'}) · {dur}", False)
+    _clog(CALIB_LOG, f"\n{tag}: {done}/{total} scenes")
+    log.warning(f"CALIB {tag}: {done}/{total} scenes -> DB saved")
+
+    # Pop up a summary / warning / error notification (bell in the sidebar).
+    if aborted:
+        _notify("Kalibrierung abgebrochen",
+                f"Gestoppt bei **{_last_room[0] or '?'}** – {done}/{total} Szenen "
+                f"fertig ({scope}, {dur}). Die bereits kalibrierten Bereiche sind "
+                f"gespeichert.")
+    elif errs:
+        lines = []
+        for rn, name, msg in errs[:8]:
+            lines.append(f"- {rn}: {name} — {msg}")
+        more = "" if len(errs) <= 8 else f"\n… und {len(errs) - 8} weitere."
+        _notify("Kalibrierung mit Fehlern",
+                f"{done}/{total} Szenen fertig ({scope}, {dur}), "
+                f"aber {len(errs)} Szene(n) fehlgeschlagen:\n" + "\n".join(lines) + more)
+    else:
+        _notify("Kalibrierung fertig",
+                f"{done}/{total} Szenen in {len(rooms)} Bereich(en) kalibriert "
+                f"({scope}, {dur}).")
     _abort[0] = False
