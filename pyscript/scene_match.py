@@ -398,6 +398,16 @@ def _light_snapshot():
     return tuple(s)
 
 
+def _on_lights():
+    # Lights currently on -- the only ones worth nudging with a forced refresh
+    # while waiting for a scene to settle (off lamps have nothing to catch up).
+    out = []
+    for lid in state.names("light"):
+        if state.get(lid) == "on":
+            out.append(lid)
+    return out
+
+
 def _scene_distance(lights):
     dists = []       # per-lamp brightness/colour distances of agreeing-on lamps
     off_pens = []    # on/off mismatch penalties (kept out of the blend max)
@@ -971,6 +981,15 @@ def _on_light_change(**kwargs):
     prev = None
     waited = 0.0
     while waited < SETTLE_MAX:
+        # Nudge laggy lamps: some Hue lamps report a STALE colour temperature for
+        # several seconds after a scene change (brightness updates at once, ct
+        # stays stuck on the old value). Without a forced re-fetch the snapshot
+        # can look "still" on that stale value and we'd match a not-yet-settled
+        # state -- and the prompt-confirm below can't catch it, because the stale
+        # value doesn't change between reads. So re-fetch the on-lights every 3 s
+        # (mirrors the calibration settle). Same fix as scene_learn/_wait_settled.
+        if int(waited) % 3 == 0:
+            _force_refresh(_on_lights())
         snap = _light_snapshot()
         if snap == prev:
             break
