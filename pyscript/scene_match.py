@@ -373,7 +373,7 @@ def _load():
     total = 0
     for v in FP.values():
         total += len(v)
-    log.warning(f"Matcher {VERSION}: {total} fingerprints loaded")
+    log.info(f"Matcher {VERSION}: {total} fingerprints loaded")
 
 
 def _excluded(sc):
@@ -804,7 +804,10 @@ def scene_match_all(**kwargs):
             dbg.append(line)
     if result != before:
         state.set(TRACKER, "ok", active_scene=result)
-        log.warning(f"Matcher {VERSION} " + " | ".join(dbg))
+        # Routine per-change summary -> info, not warning, so it stops flooding
+        # HA's error log every few seconds. To watch detection live, set the
+        # logger `custom_components.pyscript.file.scene_match` to info.
+        log.info(f"Matcher {VERSION} " + " | ".join(dbg))
 
 
 @service
@@ -985,7 +988,7 @@ def _loop():
     # rooms flip between scenes. One loop only now; a full HA restart clears any
     # already-accumulated old loops from before this guard existed.
     task.unique("matcher_loop")
-    log.warning(f"Matcher loop started {VERSION}")
+    log.info(f"Matcher loop started {VERSION}")
     while True:
         try:
             scene_match_all()
