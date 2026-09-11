@@ -238,7 +238,12 @@ List the exact room names with:
 
 Fingerprint matching is inherently approximate:
 
-- **Identical scenes** (same colours/brightness) can't be told apart.
+- **Identical scenes** (same colours/brightness *and* the same per-lamp effect)
+  can't be told apart. A lamp **effect** (sparkle/candle/fire/prism …) *is*
+  compared, so two scenes identical in colour and brightness but differing only
+  in that one lamp sparkles (e.g. a *Stille Nacht* tree vs plain *Hell*) are told
+  apart. (This is distinct from a **dynamic scene**, which cycles a whole palette
+  and is handled separately.)
 - **Very dim scenes** are matched mainly by brightness and on/off, because Hue
   reports colour unreliably at low brightness — but only for **near-white**
   tints. A **saturated** colour (a lamp well off the white/colour-temperature

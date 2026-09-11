@@ -13,7 +13,7 @@ import math
 import time
 from homeassistant.util import slugify
 
-VERSION = "v16"  # bumped on every change; printed in the log to confirm what runs
+VERSION = "v17"  # bumped on every change; printed in the log to confirm what runs
 
 # All persistent data for this integration lives in one folder so it is easy to
 # find and back up (was scattered as scene_*.* in /config root). The old paths
@@ -90,6 +90,11 @@ BLEND_WEIGHT = 0.2
 # room over CLEAR -- "one lamp off doesn't change the colours of the rest".
 # On/off still discriminates subset scenes because those differ in SEVERAL lamps.
 OFF_PENALTY = 0.5
+# Penalty for a lamp whose effect (sparkle/candle/fire/prism/...) differs from
+# the fingerprint. An effect is a strong, brightness-independent scene marker;
+# two scenes identical in colour+brightness but differing only in a lamp's
+# effect (Stille Nacht's sparkling tree vs Hell) are separated by this.
+EFFECT_PENALTY = 1.0
 # Cap on a single lamp's colour-temperature distance term. A laggy Hue lamp can
 # keep reporting the PREVIOUS scene's ct for many seconds after a change (its
 # brightness updates at once), and an uncapped ct term then dominates and picks
@@ -283,10 +288,13 @@ def _load_params():
     # the scoring functions read.
     global CT_TERM_CAP, BLEND_WEIGHT, KEEP_MARGIN, ACCEPT, CLEAR
     global OFF_PENALTY, BRI_TERM_CAP, CF_THRESHOLD, CONFIRM_COUNT, SETTLE_MAX
+    global EFFECT_PENALTY
     over = task.executor(_read_json, PARAMS_FILE)
     if not over:
         return
     applied = {}
+    if "EFFECT_PENALTY" in over:
+        EFFECT_PENALTY = over["EFFECT_PENALTY"]; applied["EFFECT_PENALTY"] = EFFECT_PENALTY
     if "CT_TERM_CAP" in over:
         CT_TERM_CAP = over["CT_TERM_CAP"]; applied["CT_TERM_CAP"] = CT_TERM_CAP
     if "BLEND_WEIGHT" in over:
@@ -482,6 +490,20 @@ def _scene_distance(lights):
                 dh = abs(cur[0] - fp["hs"][0])
                 dh = min(dh, 360 - dh)
                 d += cw * (dh / 180.0 + abs(cur[1] - fp["hs"][1]) / 100.0)
+                contributed = True
+        # Effect (sparkle / candle / fire / prism ...) is part of a scene's
+        # identity and is brightness-independent -- and it is NOT a dynamic
+        # palette (dyn stays 'none'), so it isn't wildcarded above. Two scenes
+        # can be byte-identical in colour+brightness yet differ only in that one
+        # lamp sparkles (e.g. Stille Nacht's tree vs Hell). Colour is still
+        # compared (the effect animates over a stable base colour); the effect
+        # is an ADDITIONAL discriminator. "effect" in dontcare opts out.
+        if "effect" not in dc:
+            fp_eff = fp.get("effect")
+            live_eff = attrs.get("effect")
+            live_eff = live_eff if (live_eff and live_eff != "off") else None
+            if (fp_eff or live_eff) and fp_eff != live_eff:
+                d += EFFECT_PENALTY
                 contributed = True
         if not contributed:
             continue

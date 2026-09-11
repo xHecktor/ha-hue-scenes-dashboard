@@ -42,6 +42,7 @@ DEFAULTS = {
     "OFF_PENALTY": 0.50,
     "BRI_TERM_CAP": 0.15,
     "CF_THRESHOLD": 0.10,
+    "EFFECT_PENALTY": 1.0,
 }
 # Grid search space (only the parameters worth sweeping on detection accuracy).
 GRID = {
@@ -158,6 +159,14 @@ def scene_distance(fp_lights, live, p):
                 dh = min(dh, 360 - dh)
                 d += cw * (dh / 180.0 + abs(cur[1] - fp["hs"][1]) / 100.0)
                 contributed = True
+        # effect discriminator -- keep in sync with scene_match.py
+        if "effect" not in dc:
+            fp_eff = fp.get("effect")
+            live_eff = a.get("eff")
+            live_eff = live_eff if (live_eff and live_eff != "off") else None
+            if (fp_eff or live_eff) and fp_eff != live_eff:
+                d += p["EFFECT_PENALTY"]
+                contributed = True
         if not contributed:
             continue
         dists.append(d)
@@ -221,6 +230,9 @@ def _parse_lamp(rest):
         d["hs"] = [float(m.group(1)), float(m.group(2))]
     m = re.search(r"dyn=(\S+)", rest)
     d["dyn"] = m.group(1) if m else None
+    m = re.search(r"eff=(\S+)", rest)
+    e = m.group(1) if m else None
+    d["eff"] = e if e not in ("off", "None", None) else None
     return d
 
 
