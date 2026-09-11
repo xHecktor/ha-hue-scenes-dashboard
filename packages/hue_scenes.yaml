@@ -423,20 +423,7 @@ automation:
           dynamic: true
           speed: "{{ trigger.to_state.state | int }}"
 
-  # Fill the calibration room picker with the actual room names on startup.
-  - alias: "Calibrate: populate room list"
-    trigger:
-      - platform: homeassistant
-        event: start
-    action:
-      - delay: "00:00:10"
-      - action: input_select.set_options
-        target:
-          entity_id: input_select.calibrate_room
-        data:
-          options: >
-            {{ ['Alle Räume'] + (states.scene
-               | selectattr('attributes.group_type', 'defined')
-               | selectattr('attributes.group_type', 'in', ['room', 'zone'])
-               | map(attribute='attributes.group_name')
-               | reject('none') | unique | list | sort) }}
+  # NOTE: the calibration room picker (input_select.calibrate_room) is filled by
+  # pyscript (scene_fingerprints._populate_room_select, on startup and via the
+  # scene_fingerprint_refresh_rooms service), so it reliably includes every room
+  # AND the whole-home zones without a fixed start-up delay.

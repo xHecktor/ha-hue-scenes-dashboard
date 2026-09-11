@@ -285,10 +285,60 @@ def _show_estimate():
     _status(label, False)
 
 
+def _all_calib_targets():
+    # Every calibratable room/zone name (room- or zone-type scene groups),
+    # INCLUDING whole-home meta-zones. The picker lists all of these so a big
+    # zone like "Wohnung" can be calibrated on demand; only the "Alle Räume"
+    # batch run skips the meta-zones (see _group_scenes) so it can't stall.
+    names = []
+    seen = {}
+    for eid in state.names("scene"):
+        a = state.getattr(eid) or {}
+        if a.get("group_type") not in ("room", "zone"):
+            continue
+        rn = a.get("group_name")
+        if rn and rn not in seen:
+            seen[rn] = True
+            names.append(rn)
+    names.sort()
+    return names
+
+
+def _populate_room_select():
+    # Fill input_select.calibrate_room with "Alle Räume" + every room/zone. Done
+    # in pyscript (not a start-only YAML automation with a fixed delay) so the
+    # list is reliable after a restart and always includes newly added zones.
+    # set_options resets the selection, so restore the current one if still valid.
+    options = ["Alle Räume"] + _all_calib_targets()
+    try:
+        cur = state.get("input_select.calibrate_room")
+    except Exception:
+        cur = None
+    try:
+        input_select.set_options(entity_id="input_select.calibrate_room", options=options)
+        if cur in options and cur != "Alle Räume":
+            input_select.select_option(entity_id="input_select.calibrate_room", option=cur)
+    except Exception as e:
+        log.warning(f"CALIB: populate room list failed: {e}")
+
+
 @time_trigger("startup")
 def _calib_startup():
     # Create the entity after a restart (otherwise the card shows "entity not
-    # found") and show the estimate for the current selection.
+    # found"), fill the room picker (incl. big zones), and show the estimate.
+    _populate_room_select()
+    _show_estimate()
+
+
+@service
+def scene_fingerprint_refresh_rooms(**kwargs):
+    """yaml
+name: Refresh the calibration room picker
+description: Re-scan the scene groups and repopulate the room/zone dropdown
+  (incl. whole-home zones). Handy after adding a room or zone in Hue without
+  restarting Home Assistant.
+"""
+    _populate_room_select()
     _show_estimate()
 
 
