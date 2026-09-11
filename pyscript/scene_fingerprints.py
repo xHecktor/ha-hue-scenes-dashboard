@@ -197,15 +197,42 @@ def _group_scenes(room, lights_all, log_skips=False):
             if log_skips:
                 _clog(CALIB_LOG, f"[{rn}] skipped (no Hue group)")
             continue
-        # Skip whole-home meta-zones (a group spanning most lamps) on whole-home
-        # runs -- pointless (overlap every room) and their huge settles stall it.
-        gm = (state.getattr(g) or {}).get("entity_id") or []
-        if not room and len(lights_all) and len(gm) > 0.6 * len(lights_all):
-            if log_skips:
-                _clog(CALIB_LOG, f"[{rn}] skipped (meta-zone, {len(gm)}/{len(lights_all)} lamps)")
-            continue
         rooms.setdefault(rn, {"group": g, "scenes": []})
         rooms[rn]["scenes"].append((eid, a.get("name") or eid))
+
+    # Skip whole-home meta-zones on whole-home runs. A Hue zone like "Wohnung"
+    # spans every room; calibrating it is pointless (overlaps all rooms) and its
+    # 40+-lamp settle waits stall the whole queue, so the real rooms behind it in
+    # the queue never run. The old test ("> 60% of all lamps") depended on the
+    # total lamp count and let a 43-of-~75 zone slip through. Detect it by SIZE
+    # relative to the other rooms instead: a group whose lamp count dwarfs the
+    # typical room (>= 4x the median, floor 15) -- or still spans over half the
+    # home -- is a meta-zone. A single real room (even a big open-plan one) sits
+    # near the median; only whole-flat zones are outliers. Only on whole-home
+    # runs; when a specific room is requested the user chose it deliberately.
+    if not room and len(rooms) > 1:
+        members = {}
+        sizes = []
+        for rn in rooms:
+            gm = (state.getattr(rooms[rn]["group"]) or {}).get("entity_id") or []
+            members[rn] = len(gm)
+            sizes.append(len(gm))
+        sizes.sort()
+        n = len(sizes)
+        mid = n // 2
+        med = sizes[mid] if (n % 2) else (sizes[mid - 1] + sizes[mid]) / 2.0
+        big = max(15, 4 * med)
+        drop = []
+        for rn in rooms:
+            sz = members[rn]
+            span = len(lights_all) and sz > 0.5 * len(lights_all)
+            if sz > big or span:
+                drop.append(rn)
+        for rn in drop:
+            rooms.pop(rn, None)
+            if log_skips:
+                _clog(CALIB_LOG, f"[{rn}] skipped (meta-zone, {members[rn]} Lampen, "
+                                 f"Median {med:g})")
     return rooms
 
 
